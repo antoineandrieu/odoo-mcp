@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcp-odoo"
+version = "0.1.0"
+description = "MCP server exposing Odoo RPC as typed tools/resources/prompts"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name = "MCP Odoo", email = "devnull@example.com"}]
+dependencies = [
+  "mcp>=1.0.0",
+  "httpx>=0.27.0",
+  "pydantic>=2.8.0",
+  "pydantic-settings>=2.4.0",
+  "tenacity>=8.2.3",
+  "python-dotenv>=1.0.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.0",
+  "pytest-asyncio>=0.23.8",
+  "mypy>=1.11.1",
+  "ruff>=0.6.4",
+  "types-python-dateutil",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unreachable = true
+disallow_any_generics = true
+disallow_subclassing_any = true
+disallow_any_unimported = false
+ignore_missing_imports = true
+no_implicit_reexport = true
+warn_return_any = true
+warn_unused_ignores = true
+show_error_codes = true
+
+[tool.pytest.ini_options]
+addopts = "-q"
+pythonpath = ["src"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
