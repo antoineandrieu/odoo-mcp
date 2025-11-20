@@ -1,26 +1,25 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict
+from typing import Any
 
-import httpx
 import pytest
 
 from odoo_mcp.odoo_client import OdooClient, OdooClientConfig
 
 
 class MockResponse:
-    def __init__(self, status_code: int, json_data: Dict[str, Any]) -> None:
+    def __init__(self, status_code: int, json_data: dict[str, Any]) -> None:
         self.status_code = status_code
         self._json = json_data
 
-    def json(self) -> Dict[str, Any]:
+    def json(self) -> dict[str, Any]:
         return self._json
 
 
 class MockClient:
     def __init__(self) -> None:
-        self.calls: list[Dict[str, Any]] = []
+        self.calls: list[dict[str, Any]] = []
 
     def post(self, path: str, content: str) -> MockResponse:  # type: ignore[override]
         data = json.loads(content)

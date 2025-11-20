@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 
 class OdooError(Exception):
     """Base error for Odoo client failures."""
 
-    code: Optional[int]
+    code: int | None
 
-    def __init__(self, message: str, *, code: Optional[int] = None, data: Any | None = None) -> None:
+    def __init__(self, message: str, *, code: int | None = None, data: Any | None = None) -> None:
         super().__init__(message)
         self.code = code
         self.data = data

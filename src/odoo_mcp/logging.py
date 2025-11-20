@@ -11,13 +11,13 @@ class JsonFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:  # noqa: D401
         # Avoid logging huge payloads by truncating extras
         if hasattr(record, "payload"):
-            payload = getattr(record, "payload")
+            payload = record.payload
             try:
                 text = json.dumps(payload)
             except Exception:
                 text = str(payload)
             if len(text) > 2000:
-                setattr(record, "payload", text[:2000] + "…<truncated>")
+                record.payload = text[:2000] + "…<truncated>"
         return True
 
 
@@ -29,7 +29,8 @@ class JsonFormatter(logging.Formatter):
             "message": record.getMessage(),
             "time": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
         }
-        extra = {k: v for k, v in record.__dict__.items() if k not in vars(logging.LogRecord("", 0, "", 0, "", (), None))}
+        base_vars = vars(logging.LogRecord("", 0, "", 0, "", (), None))
+        extra = {k: v for k, v in record.__dict__.items() if k not in base_vars}
         # Sanitize secrets
         for key in list(extra.keys()):
             if any(s in key.lower() for s in ("password", "token", "authorization")):
@@ -43,7 +44,7 @@ def setup_logging(level: int | str | None = None) -> None:
         level = os.getenv("LOG_LEVEL", "INFO")
     logging.captureWarnings(True)
     root = logging.getLogger()
-    root.setLevel(level)  # type: ignore[arg-type]
+    root.setLevel(level)
     handler = logging.StreamHandler(sys.stderr)
     handler.addFilter(JsonFilter())
     handler.setFormatter(JsonFormatter())

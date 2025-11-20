@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import pytest
 
@@ -21,31 +21,31 @@ class FakeClient:
     def __init__(self) -> None:
         self.uid = 7
 
-    def version(self) -> Dict[str, Any]:
+    def version(self) -> dict[str, Any]:
         return {"server_version": "17.0"}
 
-    def models_list(self, *, search: str | None = None, limit: int = 50, offset: int = 0) -> Tuple[int, List[Dict[str, Any]]]:
+    def models_list(self, *, search: str | None = None, limit: int = 50, offset: int = 0) -> tuple[int, list[dict[str, Any]]]:
         return 1, [{"model": "res.partner", "name": "Contact"}]
 
-    def fields_get(self, model: str) -> Dict[str, Any]:
+    def fields_get(self, model: str) -> dict[str, Any]:
         return {"name": {"type": "char", "required": False, "readonly": False}}
 
-    def search_read(self, model: str, domain: List[Any], *, fields: List[str] | None = None, limit: int | None = None, offset: int | None = None, order: str | None = None) -> Tuple[int, List[Dict[str, Any]]]:  # type: ignore[override]
+    def search_read(self, model: str, domain: list[Any], *, fields: list[str] | None = None, limit: int | None = None, offset: int | None = None, order: str | None = None) -> tuple[int, list[dict[str, Any]]]:  # type: ignore[override]
         return 1, [{"id": 1, "name": "X"}]
 
-    def create(self, model: str, values: Dict[str, Any]) -> int:
+    def create(self, model: str, values: dict[str, Any]) -> int:
         return 99
 
-    def write(self, model: str, ids: List[int], values: Dict[str, Any]) -> int:
+    def write(self, model: str, ids: list[int], values: dict[str, Any]) -> int:
         return len(ids)
 
-    def unlink(self, model: str, ids: List[int]) -> int:
+    def unlink(self, model: str, ids: list[int]) -> int:
         return len(ids)
 
-    def execute_kw(self, model: str, method: str, args: List[Any] | None = None, kwargs: Dict[str, Any] | None = None) -> Any:  # noqa: D401
+    def execute_kw(self, model: str, method: str, args: list[Any] | None = None, kwargs: dict[str, Any] | None = None) -> Any:  # noqa: D401
         return {"ok": True}
 
-    def report_download(self, report_name: str, ids: List[int], fmt: str = "pdf") -> tuple[str, str, str]:  # noqa: D401
+    def report_download(self, report_name: str, ids: list[int], fmt: str = "pdf") -> tuple[str, str, str]:  # noqa: D401
         return ("rep.pdf", "application/pdf", "UEs=")
 
 
@@ -72,7 +72,7 @@ async def test_tools_handlers() -> None:
     cr = await mcp_server.handle_create(CreateIn(model="res.partner", values={"name": "X"}).model_dump())
     assert cr.id == 99
 
-    wr = await mcp_server.handle_write2(WriteIn(model="res.partner", ids=[1, 2], values={"name": "Y"}).model_dump())
+    wr = await mcp_server.handle_write(WriteIn(model="res.partner", ids=[1, 2], values={"name": "Y"}).model_dump())
     assert wr["updated"] == 2
 
     ur = await mcp_server.handle_unlink(UnlinkIn(model="res.partner", ids=[1]).model_dump())

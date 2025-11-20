@@ -5,14 +5,20 @@ import json
 import logging
 import time
 import uuid
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Any
 
 import httpx
-from tenacity import RetryError, retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import (
+    RetryError,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from .errors import OdooAuthError, OdooRPCError, TransientOdooError
-
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +63,9 @@ class OdooClient:
             timeout=cfg.timeout,
             verify=cfg.verify_ssl,
             headers={"Content-Type": "application/json"},
+            follow_redirects=True,
         )
-        self._uid: Optional[int] = None
+        self._uid: int | None = None
         self._models_cache = TTLCache(60)
         self._fields_cache = TTLCache(60)
 
@@ -91,7 +98,7 @@ class OdooClient:
         }
         resp = self._http.post("/jsonrpc", content=json.dumps(payload))
         if resp.status_code >= 500:
-            logger.warning("odoo.jsonrpc.5xx", status=resp.status_code, id=req_id)
+            logger.warning("odoo.jsonrpc.5xx", extra={"status": resp.status_code, "id": req_id})
             raise TransientOdooError(f"Server error {resp.status_code}")
         if resp.status_code != 200:
             raise OdooRPCError(f"HTTP {resp.status_code} on /jsonrpc", code=resp.status_code)
@@ -107,7 +114,9 @@ class OdooClient:
 
     def authenticate(self) -> int:
         try:
-            uid = self._jsonrpc("common", "login", [self.cfg.db, self.cfg.username, self.cfg.password])
+            uid = self._jsonrpc(
+                "common", "login", [self.cfg.db, self.cfg.username, self.cfg.password]
+            )
         except RetryError as re:  # from tenacity
             raise OdooAuthError("Authentication failed (retries exhausted)") from re
         if not isinstance(uid, int):
@@ -122,7 +131,11 @@ class OdooClient:
         return res
 
     def execute_kw(
-        self, model: str, method: str, args: Optional[List[Any]] = None, kwargs: Optional[Dict[str, Any]] = None
+        self,
+        model: str,
+        method: str,
+        args: list[Any] | None = None,
+        kwargs: dict[str, Any] | None = None,
     ) -> Any:
         if args is None:
             args = []
@@ -134,39 +147,48 @@ class OdooClient:
             [self.cfg.db, self.uid, self.cfg.password, model, method, args, kwargs],
         )
 
-    def models_list(self, *, search: Optional[str] = None, limit: int = 50, offset: int = 0) -> Tuple[int, List[Dict[str, Any]]]:
+    def models_list(
+        self, *, search: str | None = None, limit: int = 50, offset: int = 0
+    ) -> tuple[int, list[dict[str, Any]]]:
         cache_key = (search or "", limit, offset)
         cached = self._models_cache.get(cache_key)
         if cached is not None:
-            return cached
-        domain: List[Any] = []
+            return cached  # type: ignore[no-any-return]
+        domain: list[Any] = []
         if search:
             domain = [["model", "ilike", search]]
         total = self.execute_kw("ir.model", "search_count", [domain])
-        ids = self.execute_kw("ir.model", "search", [domain], {"limit": limit, "offset": offset, "order": "model asc"})
+        ids = self.execute_kw(
+            "ir.model", "search", [domain], {"limit": limit, "offset": offset, "order": "model asc"}
+        )
         items = self.execute_kw("ir.model", "read", [ids, ["model", "name"]]) if ids else []
         result = (int(total), list(items))
         self._models_cache.set(cache_key, result)
         return result
 
-    def fields_get(self, model: str) -> Dict[str, Any]:
+    def fields_get(self, model: str) -> dict[str, Any]:
         cached = self._fields_cache.get((model,))
         if cached is not None:
-            return cached
-        fields = self.execute_kw(model, "fields_get", [], {"attributes": ["string", "type", "required", "readonly", "relation"]})
+            return cached  # type: ignore[no-any-return]
+        fields: dict[str, Any] = self.execute_kw(
+            model,
+            "fields_get",
+            [],
+            {"attributes": ["string", "type", "required", "readonly", "relation"]},
+        )
         self._fields_cache.set((model,), fields)
         return fields
 
     def search_read(
         self,
         model: str,
-        domain: List[Any],
-        fields: Optional[List[str]] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        order: Optional[str] = None,
-    ) -> Tuple[int, List[Dict[str, Any]]]:
-        kwargs: Dict[str, Any] = {}
+        domain: list[Any],
+        fields: list[str] | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+        order: str | None = None,
+    ) -> tuple[int, list[dict[str, Any]]]:
+        kwargs: dict[str, Any] = {}
         if fields is not None:
             kwargs["fields"] = fields
         if limit is not None:
@@ -176,25 +198,31 @@ class OdooClient:
         if order is not None:
             kwargs["order"] = order
         count = int(self.execute_kw(model, "search_count", [domain]))
-        records: List[Dict[str, Any]] = []
+        records: list[dict[str, Any]] = []
         if count:
             records = list(self.execute_kw(model, "search_read", [domain], kwargs))
         return count, records
 
-    def create(self, model: str, values: Dict[str, Any]) -> int:
+    def create(self, model: str, values: dict[str, Any]) -> int:
         new_id = self.execute_kw(model, "create", [values])
         return int(new_id)
 
-    def write(self, model: str, ids: List[int], values: Dict[str, Any]) -> int:
+    def write(self, model: str, ids: list[int], values: dict[str, Any]) -> int:
         ok = bool(self.execute_kw(model, "write", [ids, values]))
         return len(ids) if ok else 0
 
-    def unlink(self, model: str, ids: List[int]) -> int:
+    def unlink(self, model: str, ids: list[int]) -> int:
         ok = bool(self.execute_kw(model, "unlink", [ids]))
         return len(ids) if ok else 0
 
-    def report_download(self, report_name: str, ids: List[int], fmt: str = "pdf") -> tuple[str, str, str]:
-        mimetype = "application/pdf" if fmt == "pdf" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    def report_download(
+        self, report_name: str, ids: list[int], fmt: str = "pdf"
+    ) -> tuple[str, str, str]:
+        mimetype = (
+            "application/pdf"
+            if fmt == "pdf"
+            else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
         # Try a common method via ir.actions.report (Odoo >= 14)
         try:
             data = self.execute_kw(
@@ -206,10 +234,7 @@ class OdooClient:
         except OdooRPCError:
             # Fallback: many instances expose 'report' service; not guaranteed.
             data = self._jsonrpc("report", "render_report", [self.cfg.db, report_name, ids])
-        if isinstance(data, (list, tuple)) and len(data) >= 1:
-            raw = data[0]
-        else:
-            raw = data
+        raw = data[0] if isinstance(data, (list, tuple)) and len(data) >= 1 else data
         if isinstance(raw, str):
             # Might already be base64
             try:
@@ -225,4 +250,130 @@ class OdooClient:
             content_b64 = base64.b64encode(content).decode()
         filename = f"{report_name}.{fmt}"
         return filename, mimetype, content_b64
+
+    def name_search(
+        self, model: str, name: str = "", domain: list[Any] | None = None, limit: int = 100
+    ) -> list[tuple[int, str]]:
+        """Search for records by name and return [(id, display_name), ...]."""
+        if domain is None:
+            domain = []
+        result: list[tuple[int, str]] = self.execute_kw(
+            model, "name_search", [], {"name": name, "args": domain, "limit": limit}
+        )
+        return result
+
+    def name_get(self, model: str, ids: list[int]) -> list[tuple[int, str]]:
+        """Get display names for records."""
+        result: list[tuple[int, str]] = self.execute_kw(model, "name_get", [ids])
+        return result
+
+    def read_group(
+        self,
+        model: str,
+        domain: list[Any],
+        fields: list[str],
+        groupby: list[str],
+        offset: int = 0,
+        limit: int | None = None,
+        orderby: str | None = None,
+        lazy: bool = True,
+    ) -> list[dict[str, Any]]:
+        """Aggregate data grouped by specified fields."""
+        kwargs: dict[str, Any] = {
+            "fields": fields,
+            "groupby": groupby,
+            "offset": offset,
+            "lazy": lazy,
+        }
+        if limit is not None:
+            kwargs["limit"] = limit
+        if orderby is not None:
+            kwargs["orderby"] = orderby
+        result: list[dict[str, Any]] = self.execute_kw(model, "read_group", [domain], kwargs)
+        return result
+
+    def default_get(self, model: str, fields: list[str]) -> dict[str, Any]:
+        """Get default values for fields."""
+        result: dict[str, Any] = self.execute_kw(model, "default_get", [fields])
+        return result
+
+    def onchange(
+        self,
+        model: str,
+        ids: list[int],
+        values: dict[str, Any],
+        field_name: str,
+        field_onchange: dict[str, str],
+    ) -> dict[str, Any]:
+        """Simulate onchange behavior."""
+        result: dict[str, Any] = self.execute_kw(
+            model, "onchange", [ids, values, field_name, field_onchange]
+        )
+        return result
+
+    def check_access_rights(
+        self, model: str, operation: str, raise_exception: bool = False
+    ) -> bool:
+        """Check if user has access rights for operation (read/write/create/unlink)."""
+        result: bool = self.execute_kw(
+            model, "check_access_rights", [operation], {"raise_exception": raise_exception}
+        )
+        return result
+
+    def search_count(self, model: str, domain: list[Any]) -> int:
+        """Count records matching domain."""
+        result: int = self.execute_kw(model, "search_count", [domain])
+        return result
+
+    def copy(self, model: str, record_id: int, default: dict[str, Any] | None = None) -> int:
+        """Duplicate a record."""
+        kwargs = {"default": default} if default else {}
+        result: int = self.execute_kw(model, "copy", [record_id], kwargs)
+        return result
+
+    def export_data(
+        self, model: str, ids: list[int], fields: list[str], raw_data: bool = False
+    ) -> dict[str, Any]:
+        """Export data for specified records and fields."""
+        result: dict[str, Any] = self.execute_kw(
+            model, "export_data", [ids, fields], {"raw_data": raw_data}
+        )
+        return result
+
+    def load(
+        self, model: str, fields: list[str], data: list[list[Any]]
+    ) -> dict[str, Any]:
+        """Import/load data (bulk create/update)."""
+        result: dict[str, Any] = self.execute_kw(model, "load", [fields, data])
+        return result
+
+    def get_metadata(self, model: str, ids: list[int]) -> list[dict[str, Any]]:
+        """Get metadata (create/write info) for records."""
+        result: list[dict[str, Any]] = self.execute_kw(model, "get_metadata", [ids])
+        return result
+
+    def search(
+        self,
+        model: str,
+        domain: list[Any],
+        offset: int = 0,
+        limit: int | None = None,
+        order: str | None = None,
+    ) -> list[int]:
+        """Search for record IDs matching domain."""
+        kwargs: dict[str, Any] = {"offset": offset}
+        if limit is not None:
+            kwargs["limit"] = limit
+        if order is not None:
+            kwargs["order"] = order
+        result: list[int] = self.execute_kw(model, "search", [domain], kwargs)
+        return result
+
+    def read(
+        self, model: str, ids: list[int], fields: list[str] | None = None
+    ) -> list[dict[str, Any]]:
+        """Read records by IDs."""
+        kwargs = {"fields": fields} if fields else {}
+        result: list[dict[str, Any]] = self.execute_kw(model, "read", [ids], kwargs)
+        return result
 

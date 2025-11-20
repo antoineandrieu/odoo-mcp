@@ -3,31 +3,59 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
-import sys
 import uuid
-from typing import Any, Dict
+from typing import Any
 
 from .config import Settings
-from .errors import OdooError, OdooRPCError, OdooValidationError
+from .errors import OdooError, OdooRPCError
 from .logging import setup_logging
 from .odoo_client import OdooClient, OdooClientConfig
 from .schemas import (
     CallMethodIn,
     CallMethodOut,
+    CheckAccessRightsIn,
+    CheckAccessRightsOut,
+    CopyIn,
+    CopyOut,
     CreateIn,
     CreateOut,
+    DefaultGetIn,
+    DefaultGetOut,
+    ExportDataIn,
+    ExportDataOut,
+    GetMetadataIn,
+    GetMetadataOut,
+    LoadDataIn,
+    LoadDataOut,
     ModelFieldsIn,
     ModelFieldsOut,
+    ModelItem,
     ModelsListIn,
     ModelsListOut,
+    NameGetIn,
+    NameGetOut,
+    NameSearchIn,
+    NameSearchOut,
+    OnchangeIn,
+    OnchangeOut,
     PingOut,
+    ReadGroupIn,
+    ReadGroupOut,
+    ReadIn,
+    ReadOut,
     ReportDownloadIn,
     ReportDownloadOut,
+    SearchCountIn,
+    SearchCountOut,
+    SearchIn,
+    SearchOut,
     SearchReadIn,
     SearchReadOut,
+    UnlinkIn,
+    UnlinkOut,
+    WriteIn,
+    WriteOut,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +66,7 @@ _client: OdooClient | None = None
 def get_settings() -> Settings:
     global _settings
     if _settings is None:
-        _settings = Settings()
+        _settings = Settings()  # type: ignore[call-arg]
     return _settings
 
 
@@ -57,7 +85,7 @@ def get_client() -> OdooClient:
         _client = OdooClient(cfg)
         uid = _client.authenticate()
         v = _client.version()
-        logger.info("odoo.client.init", uid=uid, version=v.get("server_version"))
+        logger.info("odoo.client.init", extra={"uid": uid, "version": v.get("server_version")})
     return _client
 
 
@@ -66,20 +94,21 @@ async def handle_ping() -> PingOut:
     req_id = str(uuid.uuid4())
     client = get_client()
     version = client.version()
-    logger.info("odoo.ping", request_id=req_id, version=version.get("server_version"))
+    logger.info("odoo.ping", extra={"request_id": req_id, "version": version.get("server_version")})
     return PingOut(server_version=str(version.get("server_version")), uid=client.uid)
 
 
-async def handle_models_list(payload: Dict[str, Any]) -> ModelsListOut:
+async def handle_models_list(payload: dict[str, Any]) -> ModelsListOut:
     data = ModelsListIn.model_validate(payload)
     req_id = str(uuid.uuid4())
     client = get_client()
     total, items = client.models_list(search=data.search, limit=data.limit, offset=data.offset)
-    logger.info("odoo.models.list", request_id=req_id, total=total)
-    return ModelsListOut(total=total, items=[{"model": i.get("model"), "name": i.get("name")} for i in items])
+    logger.info("odoo.models.list", extra={"request_id": req_id, "total": total})
+    formatted_items = [ModelItem(model=str(i.get("model", "")), name=i.get("name")) for i in items]
+    return ModelsListOut(total=total, items=formatted_items)
 
 
-async def handle_model_fields(payload: Dict[str, Any]) -> ModelFieldsOut:
+async def handle_model_fields(payload: dict[str, Any]) -> ModelFieldsOut:
     data = ModelFieldsIn.model_validate(payload)
     client = get_client()
     fields = client.fields_get(data.model)
@@ -96,71 +125,163 @@ async def handle_model_fields(payload: Dict[str, Any]) -> ModelFieldsOut:
     return ModelFieldsOut(model=data.model, fields=items)  # type: ignore[arg-type]
 
 
-async def handle_search_read(payload: Dict[str, Any]) -> SearchReadOut:
+async def handle_search_read(payload: dict[str, Any]) -> SearchReadOut:
     data = SearchReadIn.model_validate(payload)
     client = get_client()
     count, records = client.search_read(
-        data.model, data.domain, fields=data.fields, limit=data.limit, offset=data.offset, order=data.order
+        data.model,
+        data.domain,
+        fields=data.fields,
+        limit=data.limit,
+        offset=data.offset,
+        order=data.order,
     )
     return SearchReadOut(count=count, records=records)
 
 
-async def handle_create(payload: Dict[str, Any]) -> CreateOut:
+async def handle_create(payload: dict[str, Any]) -> CreateOut:
     data = CreateIn.model_validate(payload)
     client = get_client()
     new_id = client.create(data.model, data.values)
     return CreateOut(id=new_id)
 
 
-async def handle_write(payload: Dict[str, Any]) -> Dict[str, Any]:
-    data = CreateIn.model_validate(payload)  # placeholder to avoid duplication
-    raise OdooValidationError("Internal schema mismatch; should not be called.")
-
-
-async def handle_write2(payload: Dict[str, Any]) -> Dict[str, Any]:
-    from .schemas import WriteIn, WriteOut
-
+async def handle_write(payload: dict[str, Any]) -> dict[str, Any]:
     data = WriteIn.model_validate(payload)
     client = get_client()
     updated = client.write(data.model, data.ids, data.values)
     return WriteOut(updated=updated).model_dump()
 
 
-async def handle_unlink(payload: Dict[str, Any]) -> Dict[str, Any]:
-    from .schemas import UnlinkIn, UnlinkOut
-
+async def handle_unlink(payload: dict[str, Any]) -> dict[str, Any]:
     data = UnlinkIn.model_validate(payload)
     client = get_client()
     deleted = client.unlink(data.model, data.ids)
     return UnlinkOut(deleted=deleted).model_dump()
 
 
-async def handle_call_method(payload: Dict[str, Any]) -> CallMethodOut:
+async def handle_call_method(payload: dict[str, Any]) -> CallMethodOut:
     data = CallMethodIn.model_validate(payload)
     client = get_client()
     res = client.execute_kw(data.model, data.method, data.args or [], data.kwargs or {})
     return CallMethodOut(result=res)
 
 
-async def handle_report_download(payload: Dict[str, Any]) -> ReportDownloadOut:
+async def handle_report_download(payload: dict[str, Any]) -> ReportDownloadOut:
     data = ReportDownloadIn.model_validate(payload)
     client = get_client()
-    filename, mimetype, content_b64 = client.report_download(data.report_name, data.ids, data.format or "pdf")
+    filename, mimetype, content_b64 = client.report_download(
+        data.report_name, data.ids, data.format or "pdf"
+    )
     return ReportDownloadOut(filename=filename, mimetype=mimetype, content_b64=content_b64)
 
 
-def server_instance():  # type: ignore[no-any-unimported]
+async def handle_name_search(payload: dict[str, Any]) -> NameSearchOut:
+    data = NameSearchIn.model_validate(payload)
+    client = get_client()
+    results = client.name_search(data.model, data.name, data.domain, data.limit)
+    return NameSearchOut(results=results)
+
+
+async def handle_name_get(payload: dict[str, Any]) -> NameGetOut:
+    data = NameGetIn.model_validate(payload)
+    client = get_client()
+    results = client.name_get(data.model, data.ids)
+    return NameGetOut(results=results)
+
+
+async def handle_read_group(payload: dict[str, Any]) -> ReadGroupOut:
+    data = ReadGroupIn.model_validate(payload)
+    client = get_client()
+    results = client.read_group(
+        data.model, data.domain, data.fields, data.groupby,
+        data.offset, data.limit, data.orderby, data.lazy
+    )
+    return ReadGroupOut(results=results)
+
+
+async def handle_default_get(payload: dict[str, Any]) -> DefaultGetOut:
+    data = DefaultGetIn.model_validate(payload)
+    client = get_client()
+    defaults = client.default_get(data.model, data.fields)
+    return DefaultGetOut(defaults=defaults)
+
+
+async def handle_onchange(payload: dict[str, Any]) -> OnchangeOut:
+    data = OnchangeIn.model_validate(payload)
+    client = get_client()
+    result = client.onchange(
+        data.model, data.ids, data.values, data.field_name, data.field_onchange
+    )
+    return OnchangeOut(result=result)
+
+
+async def handle_check_access_rights(payload: dict[str, Any]) -> CheckAccessRightsOut:
+    data = CheckAccessRightsIn.model_validate(payload)
+    client = get_client()
+    has_access = client.check_access_rights(data.model, data.operation, data.raise_exception)
+    return CheckAccessRightsOut(has_access=has_access)
+
+
+async def handle_search_count(payload: dict[str, Any]) -> SearchCountOut:
+    data = SearchCountIn.model_validate(payload)
+    client = get_client()
+    count = client.search_count(data.model, data.domain)
+    return SearchCountOut(count=count)
+
+
+async def handle_copy(payload: dict[str, Any]) -> CopyOut:
+    data = CopyIn.model_validate(payload)
+    client = get_client()
+    new_id = client.copy(data.model, data.record_id, data.default)
+    return CopyOut(new_id=new_id)
+
+
+async def handle_export_data(payload: dict[str, Any]) -> ExportDataOut:
+    data = ExportDataIn.model_validate(payload)
+    client = get_client()
+    result = client.export_data(data.model, data.ids, data.fields, data.raw_data)
+    return ExportDataOut(result=result)
+
+
+async def handle_load_data(payload: dict[str, Any]) -> LoadDataOut:
+    data = LoadDataIn.model_validate(payload)
+    client = get_client()
+    result = client.load(data.model, data.fields, data.data)
+    return LoadDataOut(result=result)
+
+
+async def handle_get_metadata(payload: dict[str, Any]) -> GetMetadataOut:
+    data = GetMetadataIn.model_validate(payload)
+    client = get_client()
+    metadata = client.get_metadata(data.model, data.ids)
+    return GetMetadataOut(metadata=metadata)
+
+
+async def handle_search(payload: dict[str, Any]) -> SearchOut:
+    data = SearchIn.model_validate(payload)
+    client = get_client()
+    ids = client.search(data.model, data.domain, data.offset, data.limit, data.order)
+    return SearchOut(ids=ids)
+
+
+async def handle_read(payload: dict[str, Any]) -> ReadOut:
+    data = ReadIn.model_validate(payload)
+    client = get_client()
+    records = client.read(data.model, data.ids, data.fields)
+    return ReadOut(records=records)
+
+
+def server_instance():  # type: ignore[no-untyped-def]
     # Lazy import to avoid hard dependency during tests
-    from mcp.server import Server  # type: ignore[import-not-found]
-    import mcp.types as types  # type: ignore[import-not-found]
+    import mcp.types as types
+    from mcp.server import Server
 
     s = Server("odoo")
 
     # Tools definitions and dispatcher
-    from .schemas import WriteIn, WriteOut, UnlinkIn, UnlinkOut
-
-    @s.list_tools()
-    async def _list_tools():
+    @s.list_tools()  # type: ignore[no-untyped-call]
+    async def _list_tools():  # type: ignore[no-untyped-def]
         return [
             types.Tool(
                 name="odoo.ping",
@@ -216,10 +337,88 @@ def server_instance():  # type: ignore[no-any-unimported]
                 inputSchema=ReportDownloadIn.model_json_schema(),
                 outputSchema=ReportDownloadOut.model_json_schema(),
             ),
+            types.Tool(
+                name="odoo.search",
+                description="Recherche d'IDs uniquement",
+                inputSchema=SearchIn.model_json_schema(),
+                outputSchema=SearchOut.model_json_schema(),
+            ),
+            types.Tool(
+                name="odoo.read",
+                description="Lecture de records par IDs",
+                inputSchema=ReadIn.model_json_schema(),
+                outputSchema=ReadOut.model_json_schema(),
+            ),
+            types.Tool(
+                name="odoo.name_search",
+                description="Recherche par nom (autocomplete-friendly)",
+                inputSchema=NameSearchIn.model_json_schema(),
+                outputSchema=NameSearchOut.model_json_schema(),
+            ),
+            types.Tool(
+                name="odoo.name_get",
+                description="Obtenir les noms affichés des records",
+                inputSchema=NameGetIn.model_json_schema(),
+                outputSchema=NameGetOut.model_json_schema(),
+            ),
+            types.Tool(
+                name="odoo.read_group",
+                description="Agrégation de données (sum, count, avg, etc.)",
+                inputSchema=ReadGroupIn.model_json_schema(),
+                outputSchema=ReadGroupOut.model_json_schema(),
+            ),
+            types.Tool(
+                name="odoo.default_get",
+                description="Obtenir les valeurs par défaut des champs",
+                inputSchema=DefaultGetIn.model_json_schema(),
+                outputSchema=DefaultGetOut.model_json_schema(),
+            ),
+            types.Tool(
+                name="odoo.onchange",
+                description="Simuler le comportement onchange",
+                inputSchema=OnchangeIn.model_json_schema(),
+                outputSchema=OnchangeOut.model_json_schema(),
+            ),
+            types.Tool(
+                name="odoo.check_access_rights",
+                description="Vérifier les droits d'accès utilisateur",
+                inputSchema=CheckAccessRightsIn.model_json_schema(),
+                outputSchema=CheckAccessRightsOut.model_json_schema(),
+            ),
+            types.Tool(
+                name="odoo.search_count",
+                description="Compter les records matchant un domaine",
+                inputSchema=SearchCountIn.model_json_schema(),
+                outputSchema=SearchCountOut.model_json_schema(),
+            ),
+            types.Tool(
+                name="odoo.copy",
+                description="Dupliquer un record",
+                inputSchema=CopyIn.model_json_schema(),
+                outputSchema=CopyOut.model_json_schema(),
+            ),
+            types.Tool(
+                name="odoo.export_data",
+                description="Exporter des données",
+                inputSchema=ExportDataIn.model_json_schema(),
+                outputSchema=ExportDataOut.model_json_schema(),
+            ),
+            types.Tool(
+                name="odoo.load",
+                description="Importer/charger des données en masse",
+                inputSchema=LoadDataIn.model_json_schema(),
+                outputSchema=LoadDataOut.model_json_schema(),
+            ),
+            types.Tool(
+                name="odoo.get_metadata",
+                description="Obtenir les métadonnées (create/write info)",
+                inputSchema=GetMetadataIn.model_json_schema(),
+                outputSchema=GetMetadataOut.model_json_schema(),
+            ),
         ]
 
-    @s.call_tool(validate_input=True)
-    async def _call_tool(name: str, arguments: Dict[str, Any]):
+    @s.call_tool(validate_input=True)  # type: ignore[misc]
+    async def _call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if name == "odoo.ping":
             return (await handle_ping()).model_dump()
         if name == "odoo.models.list":
@@ -231,35 +430,67 @@ def server_instance():  # type: ignore[no-any-unimported]
         if name == "odoo.create":
             return (await handle_create(arguments)).model_dump()
         if name == "odoo.write":
-            return await handle_write2(arguments)
+            return await handle_write(arguments)
         if name == "odoo.unlink":
             return await handle_unlink(arguments)
         if name == "odoo.call_method":
             return (await handle_call_method(arguments)).model_dump()
         if name == "odoo.report.download":
             return (await handle_report_download(arguments)).model_dump()
+        if name == "odoo.search":
+            return (await handle_search(arguments)).model_dump()
+        if name == "odoo.read":
+            return (await handle_read(arguments)).model_dump()
+        if name == "odoo.name_search":
+            return (await handle_name_search(arguments)).model_dump()
+        if name == "odoo.name_get":
+            return (await handle_name_get(arguments)).model_dump()
+        if name == "odoo.read_group":
+            return (await handle_read_group(arguments)).model_dump()
+        if name == "odoo.default_get":
+            return (await handle_default_get(arguments)).model_dump()
+        if name == "odoo.onchange":
+            return (await handle_onchange(arguments)).model_dump()
+        if name == "odoo.check_access_rights":
+            return (await handle_check_access_rights(arguments)).model_dump()
+        if name == "odoo.search_count":
+            return (await handle_search_count(arguments)).model_dump()
+        if name == "odoo.copy":
+            return (await handle_copy(arguments)).model_dump()
+        if name == "odoo.export_data":
+            return (await handle_export_data(arguments)).model_dump()
+        if name == "odoo.load":
+            return (await handle_load_data(arguments)).model_dump()
+        if name == "odoo.get_metadata":
+            return (await handle_get_metadata(arguments)).model_dump()
         raise OdooRPCError(f"Unknown tool: {name}")
 
     # Resources
-    @s.list_resources()
-    async def _list_resources():
+    @s.list_resources()  # type: ignore[no-untyped-call]
+    async def _list_resources():  # type: ignore[no-untyped-def]
         return [
-            types.Resource(uri="odoo/version", description="Version serveur + db + uid"),
-            types.Resource(uri="odoo/models", description="Liste des modèles (TTL 60s)"),
+            types.Resource(uri="odoo/version", description="Version serveur + db + uid"),  # type: ignore[call-arg, arg-type]
+            types.Resource(uri="odoo/models", description="Liste des modèles (TTL 60s)"),  # type: ignore[call-arg, arg-type]
         ]
 
-    @s.list_resource_templates()
-    async def _list_resource_templates():
+    @s.list_resource_templates()  # type: ignore[no-untyped-call]
+    async def _list_resource_templates():  # type: ignore[no-untyped-def]
         return [
-            types.ResourceTemplate(uriTemplate="odoo/schema/{model}", description="Schéma détaillé d'un modèle"),
+            types.ResourceTemplate(  # type: ignore[call-arg]
+                uriTemplate="odoo/schema/{model}", description="Schéma détaillé d'un modèle"
+            ),
         ]
 
-    @s.read_resource()
-    async def _read_resource(uri: str):
+    @s.read_resource()  # type: ignore[no-untyped-call, misc]
+    async def _read_resource(uri: str) -> str:
         client = get_client()
         if uri == "odoo/version":
             version = client.version()
-            payload = {"server_version": version.get("server_version"), "db": get_settings().db, "uid": client.uid}
+            payload = {
+                "server_version": version.get("server_version"),
+                "db": get_settings().db,
+                "uid": client.uid,
+            }
             return json.dumps(payload)
         if uri == "odoo/models":
             total, items = client.models_list(limit=100, offset=0)
@@ -272,8 +503,8 @@ def server_instance():  # type: ignore[no-any-unimported]
         raise OdooRPCError(f"Unknown resource: {uri}")
 
     # Prompts
-    @s.list_prompts()
-    async def _list_prompts():
+    @s.list_prompts()  # type: ignore[no-untyped-call]
+    async def _list_prompts():  # type: ignore[no-untyped-def]
         return [
             types.Prompt(
                 name="make_search_read_prompt",
@@ -293,8 +524,8 @@ def server_instance():  # type: ignore[no-any-unimported]
             ),
         ]
 
-    @s.get_prompt()
-    async def _get_prompt(name: str, args: Dict[str, str] | None):
+    @s.get_prompt()  # type: ignore[no-untyped-call, misc]
+    async def _get_prompt(name: str, args: dict[str, str] | None):  # type: ignore[no-untyped-def]
         args = args or {}
         if name == "make_search_read_prompt":
             messages = [
@@ -304,7 +535,8 @@ def server_instance():  # type: ignore[no-any-unimported]
                         type="text",
                         text=(
                             "Tu aides à formuler un domaine Odoo et un appel odoo.search_read. "
-                            "Explique les hypothèses brièvement puis propose l'appel avec domain/fields/order/limit."
+                            "Explique les hypothèses brièvement puis propose l'appel avec "
+                            "domain/fields/order/limit."
                         ),
                     ),
                 ),
@@ -312,7 +544,10 @@ def server_instance():  # type: ignore[no-any-unimported]
                     role="user",
                     content=types.TextContent(
                         type="text",
-                        text=f"Modèle: {args.get('model','')}\nObjectif: {args.get('goal_description','')}",
+                        text=(
+                            f"Modèle: {args.get('model','')}\n"
+                            f"Objectif: {args.get('goal_description','')}"
+                        ),
                     ),
                 ),
             ]
@@ -324,8 +559,10 @@ def server_instance():  # type: ignore[no-any-unimported]
                     content=types.TextContent(
                         type="text",
                         text=(
-                            "Élabore un dict 'values' cohérent pour {{model}} en respectant les types. "
-                            "Explique le traitement des relations M2O/M2M (IDs int, (6,0,[ids]) etc.)."
+                            "Élabore un dict 'values' cohérent pour {{model}} en "
+                            "respectant les types. "
+                            "Explique le traitement des relations M2O/M2M "
+                            "(IDs int, (6,0,[ids]) etc.)."
                         ).replace("{{model}}", args.get("model", "")),
                     ),
                 ),
@@ -344,14 +581,14 @@ def server_instance():  # type: ignore[no-any-unimported]
 
 async def amain() -> None:
     # Lazy import transport to avoid dependency in import path
-    from mcp.server.stdio import stdio_server  # type: ignore[import-not-found]
+    from mcp.server.stdio import stdio_server
 
     setup_logging()
     # ensure settings load early for fast fail
     s = get_settings()
-    logger.info("mcp.start", settings=s.safe_dict())
+    logger.info("mcp.start", extra={"settings": s.safe_dict()})
     _ = get_client()
-    server = server_instance()
+    server = server_instance()  # type: ignore[no-untyped-call]
     init_options = server.create_initialization_options()
     async with stdio_server() as (read_stream, write_stream):
         await server.run(read_stream, write_stream, init_options)
@@ -362,7 +599,7 @@ def main() -> None:
         asyncio.run(amain())
     except OdooError as e:
         # Log cleanly and exit
-        logging.getLogger(__name__).error("mcp.error", message=str(e))
+        logging.getLogger(__name__).error("mcp.error: %s", str(e))
         raise
 
 

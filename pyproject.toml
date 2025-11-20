@@ -18,6 +18,9 @@ dependencies = [
   "python-dotenv>=1.0.1",
 ]
 
+[project.scripts]
+mcp-odoo = "odoo_mcp.mcp_server:main"
+
 [project.optional-dependencies]
 dev = [
   "pytest>=8.3.0",
