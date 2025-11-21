@@ -85,7 +85,7 @@ def get_client() -> OdooClient:
         _client = OdooClient(cfg)
         uid = _client.authenticate()
         v = _client.version()
-        logger.info("odoo.client.init", extra={"uid": uid, "version": v.get("server_version")})
+        logger.info("client.init", extra={"uid": uid, "version": v.get("server_version")})
     return _client
 
 
@@ -94,7 +94,7 @@ async def handle_ping() -> PingOut:
     req_id = str(uuid.uuid4())
     client = get_client()
     version = client.version()
-    logger.info("odoo.ping", extra={"request_id": req_id, "version": version.get("server_version")})
+    logger.info("ping", extra={"request_id": req_id, "version": version.get("server_version")})
     return PingOut(server_version=str(version.get("server_version")), uid=client.uid)
 
 
@@ -103,7 +103,7 @@ async def handle_models_list(payload: dict[str, Any]) -> ModelsListOut:
     req_id = str(uuid.uuid4())
     client = get_client()
     total, items = client.models_list(search=data.search, limit=data.limit, offset=data.offset)
-    logger.info("odoo.models.list", extra={"request_id": req_id, "total": total})
+    logger.info("models_list", extra={"request_id": req_id, "total": total})
     formatted_items = [ModelItem(model=str(i.get("model", "")), name=i.get("name")) for i in items]
     return ModelsListOut(total=total, items=formatted_items)
 
@@ -279,189 +279,197 @@ def server_instance():  # type: ignore[no-untyped-def]
 
     s = Server("odoo")
 
+    # Helper to ensure inputSchema has type: object at root
+    def wrap_schema(schema: dict[str, Any]) -> dict[str, Any]:
+        if not schema:
+            return {"type": "object", "properties": {}}
+        if "type" not in schema:
+            schema["type"] = "object"
+        return schema
+
     # Tools definitions and dispatcher
     @s.list_tools()  # type: ignore[no-untyped-call]
     async def _list_tools():  # type: ignore[no-untyped-def]
         return [
             types.Tool(
-                name="odoo.ping",
+                name="ping",
                 description="Vérifie la connexion (auth + version)",
-                inputSchema={},
+                inputSchema=wrap_schema({}),
                 outputSchema=PingOut.model_json_schema(),
             ),
             types.Tool(
-                name="odoo.models.list",
+                name="models_list",
                 description="Liste des modèles installés",
-                inputSchema=ModelsListIn.model_json_schema(),
+                inputSchema=wrap_schema(ModelsListIn.model_json_schema()),
                 outputSchema=ModelsListOut.model_json_schema(),
             ),
             types.Tool(
-                name="odoo.model.fields",
+                name="model_fields",
                 description="Liste des champs d’un modèle",
-                inputSchema=ModelFieldsIn.model_json_schema(),
+                inputSchema=wrap_schema(ModelFieldsIn.model_json_schema()),
                 outputSchema=ModelFieldsOut.model_json_schema(),
             ),
             types.Tool(
-                name="odoo.search_read",
+                name="search_read",
                 description="Recherche + lecture",
-                inputSchema=SearchReadIn.model_json_schema(),
+                inputSchema=wrap_schema(SearchReadIn.model_json_schema()),
                 outputSchema=SearchReadOut.model_json_schema(),
             ),
             types.Tool(
-                name="odoo.create",
+                name="create",
                 description="Création d’un enregistrement",
-                inputSchema=CreateIn.model_json_schema(),
+                inputSchema=wrap_schema(CreateIn.model_json_schema()),
                 outputSchema=CreateOut.model_json_schema(),
             ),
             types.Tool(
-                name="odoo.write",
+                name="write",
                 description="Mise à jour",
-                inputSchema=WriteIn.model_json_schema(),
+                inputSchema=wrap_schema(WriteIn.model_json_schema()),
                 outputSchema=WriteOut.model_json_schema(),
             ),
             types.Tool(
-                name="odoo.unlink",
+                name="unlink",
                 description="Suppression",
-                inputSchema=UnlinkIn.model_json_schema(),
+                inputSchema=wrap_schema(UnlinkIn.model_json_schema()),
                 outputSchema=UnlinkOut.model_json_schema(),
             ),
             types.Tool(
-                name="odoo.call_method",
+                name="call_method",
                 description="Appel arbitraire à execute_kw",
-                inputSchema=CallMethodIn.model_json_schema(),
+                inputSchema=wrap_schema(CallMethodIn.model_json_schema()),
                 outputSchema=CallMethodOut.model_json_schema(),
             ),
             types.Tool(
-                name="odoo.report.download",
+                name="report_download",
                 description="Télécharge un rapport (pdf/xlsx)",
-                inputSchema=ReportDownloadIn.model_json_schema(),
+                inputSchema=wrap_schema(ReportDownloadIn.model_json_schema()),
                 outputSchema=ReportDownloadOut.model_json_schema(),
             ),
             types.Tool(
-                name="odoo.search",
+                name="search",
                 description="Recherche d'IDs uniquement",
-                inputSchema=SearchIn.model_json_schema(),
+                inputSchema=wrap_schema(SearchIn.model_json_schema()),
                 outputSchema=SearchOut.model_json_schema(),
             ),
             types.Tool(
-                name="odoo.read",
+                name="read",
                 description="Lecture de records par IDs",
-                inputSchema=ReadIn.model_json_schema(),
+                inputSchema=wrap_schema(ReadIn.model_json_schema()),
                 outputSchema=ReadOut.model_json_schema(),
             ),
             types.Tool(
-                name="odoo.name_search",
+                name="name_search",
                 description="Recherche par nom (autocomplete-friendly)",
-                inputSchema=NameSearchIn.model_json_schema(),
+                inputSchema=wrap_schema(NameSearchIn.model_json_schema()),
                 outputSchema=NameSearchOut.model_json_schema(),
             ),
             types.Tool(
-                name="odoo.name_get",
+                name="name_get",
                 description="Obtenir les noms affichés des records",
-                inputSchema=NameGetIn.model_json_schema(),
+                inputSchema=wrap_schema(NameGetIn.model_json_schema()),
                 outputSchema=NameGetOut.model_json_schema(),
             ),
             types.Tool(
-                name="odoo.read_group",
+                name="read_group",
                 description="Agrégation de données (sum, count, avg, etc.)",
-                inputSchema=ReadGroupIn.model_json_schema(),
+                inputSchema=wrap_schema(ReadGroupIn.model_json_schema()),
                 outputSchema=ReadGroupOut.model_json_schema(),
             ),
             types.Tool(
-                name="odoo.default_get",
+                name="default_get",
                 description="Obtenir les valeurs par défaut des champs",
-                inputSchema=DefaultGetIn.model_json_schema(),
+                inputSchema=wrap_schema(DefaultGetIn.model_json_schema()),
                 outputSchema=DefaultGetOut.model_json_schema(),
             ),
             types.Tool(
-                name="odoo.onchange",
+                name="onchange",
                 description="Simuler le comportement onchange",
-                inputSchema=OnchangeIn.model_json_schema(),
+                inputSchema=wrap_schema(OnchangeIn.model_json_schema()),
                 outputSchema=OnchangeOut.model_json_schema(),
             ),
             types.Tool(
-                name="odoo.check_access_rights",
+                name="check_access_rights",
                 description="Vérifier les droits d'accès utilisateur",
-                inputSchema=CheckAccessRightsIn.model_json_schema(),
+                inputSchema=wrap_schema(CheckAccessRightsIn.model_json_schema()),
                 outputSchema=CheckAccessRightsOut.model_json_schema(),
             ),
             types.Tool(
-                name="odoo.search_count",
+                name="search_count",
                 description="Compter les records matchant un domaine",
-                inputSchema=SearchCountIn.model_json_schema(),
+                inputSchema=wrap_schema(SearchCountIn.model_json_schema()),
                 outputSchema=SearchCountOut.model_json_schema(),
             ),
             types.Tool(
-                name="odoo.copy",
+                name="copy",
                 description="Dupliquer un record",
-                inputSchema=CopyIn.model_json_schema(),
+                inputSchema=wrap_schema(CopyIn.model_json_schema()),
                 outputSchema=CopyOut.model_json_schema(),
             ),
             types.Tool(
-                name="odoo.export_data",
+                name="export_data",
                 description="Exporter des données",
-                inputSchema=ExportDataIn.model_json_schema(),
+                inputSchema=wrap_schema(ExportDataIn.model_json_schema()),
                 outputSchema=ExportDataOut.model_json_schema(),
             ),
             types.Tool(
-                name="odoo.load",
+                name="load",
                 description="Importer/charger des données en masse",
-                inputSchema=LoadDataIn.model_json_schema(),
+                inputSchema=wrap_schema(LoadDataIn.model_json_schema()),
                 outputSchema=LoadDataOut.model_json_schema(),
             ),
             types.Tool(
-                name="odoo.get_metadata",
+                name="get_metadata",
                 description="Obtenir les métadonnées (create/write info)",
-                inputSchema=GetMetadataIn.model_json_schema(),
+                inputSchema=wrap_schema(GetMetadataIn.model_json_schema()),
                 outputSchema=GetMetadataOut.model_json_schema(),
             ),
         ]
 
     @s.call_tool(validate_input=True)  # type: ignore[misc]
     async def _call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        if name == "odoo.ping":
+        if name == "ping":
             return (await handle_ping()).model_dump()
-        if name == "odoo.models.list":
+        if name == "models_list":
             return (await handle_models_list(arguments)).model_dump()
-        if name == "odoo.model.fields":
+        if name == "model_fields":
             return (await handle_model_fields(arguments)).model_dump()
-        if name == "odoo.search_read":
+        if name == "search_read":
             return (await handle_search_read(arguments)).model_dump()
-        if name == "odoo.create":
+        if name == "create":
             return (await handle_create(arguments)).model_dump()
-        if name == "odoo.write":
+        if name == "write":
             return await handle_write(arguments)
-        if name == "odoo.unlink":
+        if name == "unlink":
             return await handle_unlink(arguments)
-        if name == "odoo.call_method":
+        if name == "call_method":
             return (await handle_call_method(arguments)).model_dump()
-        if name == "odoo.report.download":
+        if name == "report_download":
             return (await handle_report_download(arguments)).model_dump()
-        if name == "odoo.search":
+        if name == "search":
             return (await handle_search(arguments)).model_dump()
-        if name == "odoo.read":
+        if name == "read":
             return (await handle_read(arguments)).model_dump()
-        if name == "odoo.name_search":
+        if name == "name_search":
             return (await handle_name_search(arguments)).model_dump()
-        if name == "odoo.name_get":
+        if name == "name_get":
             return (await handle_name_get(arguments)).model_dump()
-        if name == "odoo.read_group":
+        if name == "read_group":
             return (await handle_read_group(arguments)).model_dump()
-        if name == "odoo.default_get":
+        if name == "default_get":
             return (await handle_default_get(arguments)).model_dump()
-        if name == "odoo.onchange":
+        if name == "onchange":
             return (await handle_onchange(arguments)).model_dump()
-        if name == "odoo.check_access_rights":
+        if name == "check_access_rights":
             return (await handle_check_access_rights(arguments)).model_dump()
-        if name == "odoo.search_count":
+        if name == "search_count":
             return (await handle_search_count(arguments)).model_dump()
-        if name == "odoo.copy":
+        if name == "copy":
             return (await handle_copy(arguments)).model_dump()
-        if name == "odoo.export_data":
+        if name == "export_data":
             return (await handle_export_data(arguments)).model_dump()
-        if name == "odoo.load":
+        if name == "load":
             return (await handle_load_data(arguments)).model_dump()
-        if name == "odoo.get_metadata":
+        if name == "get_metadata":
             return (await handle_get_metadata(arguments)).model_dump()
         raise OdooRPCError(f"Unknown tool: {name}")
 
@@ -469,22 +477,22 @@ def server_instance():  # type: ignore[no-untyped-def]
     @s.list_resources()  # type: ignore[no-untyped-call]
     async def _list_resources():  # type: ignore[no-untyped-def]
         return [
-            types.Resource(uri="odoo/version", description="Version serveur + db + uid"),  # type: ignore[call-arg, arg-type]
-            types.Resource(uri="odoo/models", description="Liste des modèles (TTL 60s)"),  # type: ignore[call-arg, arg-type]
+            types.Resource(uri="odoo://version", name="Odoo Version", description="Version serveur + db + uid"),  # type: ignore[call-arg]
+            types.Resource(uri="odoo://models", name="Odoo Models", description="Liste des modèles (TTL 60s)"),  # type: ignore[call-arg]
         ]
 
     @s.list_resource_templates()  # type: ignore[no-untyped-call]
     async def _list_resource_templates():  # type: ignore[no-untyped-def]
         return [
             types.ResourceTemplate(  # type: ignore[call-arg]
-                uriTemplate="odoo/schema/{model}", description="Schéma détaillé d'un modèle"
+                uriTemplate="odoo://schema/{model}", name="Odoo Model Schema", description="Schéma détaillé d'un modèle"
             ),
         ]
 
     @s.read_resource()  # type: ignore[no-untyped-call, misc]
     async def _read_resource(uri: str) -> str:
         client = get_client()
-        if uri == "odoo/version":
+        if uri == "odoo://version":
             version = client.version()
             payload = {
                 "server_version": version.get("server_version"),
@@ -492,11 +500,11 @@ def server_instance():  # type: ignore[no-untyped-def]
                 "uid": client.uid,
             }
             return json.dumps(payload)
-        if uri == "odoo/models":
+        if uri == "odoo://models":
             total, items = client.models_list(limit=100, offset=0)
             payload = {"total": total, "items": items}
             return json.dumps(payload)
-        if uri.startswith("odoo/schema/"):
+        if uri.startswith("odoo://schema/"):
             model = uri.split("/", 2)[2]
             fields = client.fields_get(model)
             return json.dumps({"model": model, "fields": fields})
