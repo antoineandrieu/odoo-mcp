@@ -1,8 +1,12 @@
 # MCP Odoo Server
 
-A powerful Model Context Protocol (MCP) server that exposes Odoo's complete API as typed tools, making it easy to interact with Odoo through Claude Desktop.
+A Model Context Protocol (MCP) server that exposes Odoo's complete API as typed tools for seamless integration with Claude Desktop and other MCP clients.
 
-## ✨ Features
+## Description
+
+This MCP server provides a comprehensive bridge between Claude Desktop and Odoo ERP systems, enabling natural language interactions with your Odoo instance. It exposes 23 carefully designed tools that cover the full spectrum of Odoo operations, from basic CRUD to advanced reporting and data aggregation.
+
+## Features
 
 - **23 powerful tools** covering all Odoo operations
 - **Fully typed** with Pydantic schemas and mypy strict mode
@@ -10,9 +14,15 @@ A powerful Model Context Protocol (MCP) server that exposes Odoo's complete API 
 - **Comprehensive** - CRUD, search, aggregations, reports, metadata, and more
 - **Easy to install** with automated scripts and configuration helpers
 
-## 🚀 Quick Start
+## Installation
 
-### 1. Install
+### Requirements
+
+- Python 3.10 or higher
+- Access to an Odoo instance (URL, database name, username, and password)
+- Claude Desktop (for MCP client integration)
+
+### Install
 
 ```bash
 git clone <your-repo-url> odoo-mcp
@@ -22,12 +32,12 @@ chmod +x install.sh
 ```
 
 The installation script will:
-- ✓ Check Python version (3.10+ required)
-- ✓ Create virtual environment
-- ✓ Install all dependencies
-- ✓ Guide you through configuration
+- Check Python version (3.10+ required)
+- Create virtual environment
+- Install all dependencies
+- Guide you through configuration
 
-### 2. Configure
+### Configure
 
 Run the interactive configuration helper:
 
@@ -59,18 +69,35 @@ This will:
 }
 ```
 
-### 3. Restart Claude Desktop
+### Restart Claude Desktop
 
 Quit and restart Claude Desktop to load the MCP server.
 
-### 4. Test It
+## Usage
 
-Ask Claude:
+Once installed and configured, you can interact with your Odoo instance through Claude Desktop using natural language. Here are some example prompts:
+
+**Test the connection:**
 > "Can you ping the Odoo server?"
 
-Claude should respond with your Odoo version and connection details!
+**Search for records:**
+> "Find all customers in the res.partner model whose name contains 'Acme'"
 
-## 🐳 Docker Installation (Alternative)
+**Read specific data:**
+> "Show me the details of partner with ID 15"
+
+**Create records:**
+> "Create a new partner with name 'John Doe' and email 'john@example.com'"
+
+**Generate reports:**
+> "Download the invoice report for invoice ID 42 as PDF"
+
+**Aggregate data:**
+> "Count how many sales orders are in 'draft' state, grouped by salesperson"
+
+The MCP server provides 23 tools covering all Odoo operations - see the [Available Tools](#available-tools) section below for the complete list.
+
+## Docker Installation (Alternative)
 
 Build and run with Docker:
 
@@ -103,7 +130,7 @@ docker run -i \
 }
 ```
 
-## ⚙️ Environment Variables
+## Environment Variables
 
 - `ODOO_URL` - Your Odoo instance URL (e.g., https://mycompany.odoo.com)
 - `ODOO_DB` - Database name
@@ -113,7 +140,7 @@ docker run -i \
 - `ODOO_VERIFY_SSL` - Verify SSL certificates (default: true)
 - `LOG_LEVEL` - Logging level: DEBUG, INFO, WARNING, ERROR (default: INFO)
 
-## 🛠️ Development
+## Development
 
 ### Commands
 
@@ -183,7 +210,7 @@ The server will start and wait for MCP connections via stdin/stdout.
 - `make_search_read_prompt`: turn a business description into `odoo.search_read`
 - `write_values_prompt`: prepare a coherent `values` dict for `odoo.create`/`write`
 
-## 🧪 Testing
+## Testing
 
 ```bash
 source .venv/bin/activate
@@ -194,14 +221,23 @@ pytest --cov=src         # With coverage report
 
 All tests use mocks - no real Odoo instance required for development.
 
-## 🔒 Security
+## Support
+
+If you encounter issues or have questions:
+
+- **Troubleshooting Guide:** See the [Troubleshooting](#troubleshooting) section below for common issues and solutions
+- **Logs:** Check Claude Desktop logs at `~/Library/Logs/Claude/mcp*.log` for detailed error messages
+- **Issues:** Report bugs or request features on the project's issue tracker
+- **Documentation:** Review the [Available Tools](#available-tools) section for detailed tool descriptions
+
+## Security
 
 - **Never commit credentials** - Use `.env` or environment variables
 - **SSL verification enabled** by default (set `ODOO_VERIFY_SSL=false` only for development)
 - **Passwords never logged** - Structured logging sanitizes sensitive fields
 - **Read-only users recommended** - Create dedicated Odoo users with minimal permissions
 
-## 📊 Logging
+## Logging
 
 Structured JSON logging with request correlation:
 
@@ -219,7 +255,7 @@ Structured JSON logging with request correlation:
 
 Set `LOG_LEVEL=DEBUG` for detailed debugging.
 
-## 🤝 Contributing
+## Contributing
 
 1. Fork the repository
 2. Create a feature branch
@@ -227,11 +263,13 @@ Set `LOG_LEVEL=DEBUG` for detailed debugging.
 4. Run `make check` to ensure quality
 5. Submit a pull request
 
-## 📝 License
+## License
 
-[Add your license here]
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🆘 Troubleshooting
+The MIT License is chosen for maximum permissiveness and adoption, allowing you to use, modify, and distribute this software freely for any purpose, including commercial applications.
+
+## Troubleshooting
 
 **Server not connecting?**
 - Check Claude Desktop logs: `~/Library/Logs/Claude/mcp*.log`
