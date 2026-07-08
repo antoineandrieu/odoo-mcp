@@ -52,7 +52,7 @@ def assert_tool_enabled(settings: Settings, tool_name: str) -> None:
         raise OdooSecurityError(f"Tool {tool_name!r} is disabled", code="tool_disabled")
     if tool_name in {"unlink", "load", "call_method"} and not settings.enable_dangerous_tools:
         raise OdooSecurityError(
-            f"Tool {tool_name!r} is disabled by default; set ODOO_ENABLE_DANGEROUS_TOOLS=true",
+            f"Tool {tool_name!r} is blocked by ODOO_ENABLE_DANGEROUS_TOOLS=false",
             code="dangerous_tool_disabled",
         )
 

@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from odoo_mcp.config import Settings
 from odoo_mcp.errors import OdooSecurityError
 from odoo_mcp.schemas import SearchReadIn, WriteIn
-from odoo_mcp.security import assert_model_allowed, assert_mutation_allowed
+from odoo_mcp.security import assert_method_allowed, assert_model_allowed, assert_mutation_allowed
 
 
 def configured_settings(monkeypatch: pytest.MonkeyPatch, **env: str) -> Settings:
@@ -49,6 +49,20 @@ def test_settings_accept_read_only_without_odoo_prefix(monkeypatch: pytest.Monke
     monkeypatch.setenv("READ_ONLY", "true")
     settings = configured_settings(monkeypatch)
     assert settings.read_only is True
+
+
+def test_default_policy_is_read_only_but_allows_models_methods_and_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = configured_settings(monkeypatch)
+    assert settings.read_only is True
+    assert settings.allowed_models == "*"
+    assert settings.allowed_methods == "*"
+    assert settings.disabled_tools_set == set()
+    assert settings.enable_dangerous_tools is True
+
+    assert_model_allowed(settings, "sale.order")
+    assert_method_allowed(settings, "action_confirm")
 
 
 def test_allowlist_and_read_only_policy_blocks_mutation(monkeypatch: pytest.MonkeyPatch) -> None:

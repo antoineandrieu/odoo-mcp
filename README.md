@@ -2,7 +2,7 @@
 
 Secure Model Context Protocol (MCP) server for Odoo JSON-RPC.
 
-The server exposes typed MCP tools for common Odoo read operations and guarded mutation tools for controlled administration. It is intentionally safe by default: read-only mode is enabled unless you opt in to mutations.
+The server exposes typed MCP tools for common Odoo operations and guarded mutation tools for controlled administration. It is intentionally safe by default in one simple way: read-only mode is enabled unless you opt in to mutations. Model and method allowlists default to `*` so local/admin workflows do not need extra configuration unless you want to tighten them.
 
 ## Current status and limits
 
@@ -12,8 +12,8 @@ Implemented guardrails:
 
 - `ODOO_READ_ONLY=true` by default; `READ_ONLY=true` is also accepted.
 - Model allowlist via `ODOO_ALLOWED_MODELS` / `ALLOWED_MODELS` (glob patterns supported, default `*`).
-- Method allowlist for `call_method` via `ODOO_ALLOWED_METHODS` / `ALLOWED_METHODS`.
-- `unlink`, `load`, and `call_method` disabled by default via `ODOO_DISABLED_TOOLS` and `ODOO_ENABLE_DANGEROUS_TOOLS=false`.
+- Method allowlist for `call_method` via `ODOO_ALLOWED_METHODS` / `ALLOWED_METHODS` (default `*`).
+- No tools are disabled by default beyond read-only hiding/blocking mutation tools while `ODOO_READ_ONLY=true`.
 - Mutating tools require `confirm=true` in the payload.
 - Audit logs for mutations: user, tool, model, method, ids, approximate diff hash/fields.
 - Model-name, method-name, domain, ids, limit, and sensitive-field validation.
@@ -25,7 +25,7 @@ Known limits:
 
 - The Odoo client still uses sync `httpx.Client`; a future version should migrate fully to `httpx.AsyncClient`.
 - The local TTL cache is intentionally small and simple; it is not a distributed or bounded production cache.
-- Allowlist defaults are permissive for read tools (`*` models) so existing read workflows continue to work; tighten them for production.
+- Allowlist defaults are permissive (`*` models and `*` methods) so existing workflows continue to work; tighten them for production.
 
 ## Installation
 
@@ -69,9 +69,9 @@ python -m odoo_mcp.mcp_server
 | --- | --- | --- |
 | `ODOO_READ_ONLY` / `READ_ONLY` | `true` | Blocks create/write/copy/unlink/load/call_method when true. |
 | `ODOO_ALLOWED_MODELS` / `ALLOWED_MODELS` | `*` | Comma-separated allowlist; glob patterns are accepted. |
-| `ODOO_ALLOWED_METHODS` / `ALLOWED_METHODS` | safe read methods | Comma-separated methods permitted for `call_method` when enabled. |
-| `ODOO_DISABLED_TOOLS` / `DISABLED_TOOLS` | `unlink,load,call_method` | Tools hidden and blocked by policy. |
-| `ODOO_ENABLE_DANGEROUS_TOOLS` | `false` | Required before `unlink`, `load`, or `call_method` can run. |
+| `ODOO_ALLOWED_METHODS` / `ALLOWED_METHODS` | `*` | Comma-separated methods permitted for `call_method` when read-only is disabled. |
+| `ODOO_DISABLED_TOOLS` / `DISABLED_TOOLS` | empty | Optional tools to hide and block by policy. |
+| `ODOO_ENABLE_DANGEROUS_TOOLS` | `true` | Set to `false` if you want an additional kill-switch for `unlink`, `load`, and `call_method`. |
 | `ODOO_MAX_LIMIT` | `500` | Max requested `limit`. |
 | `ODOO_MAX_RECORDS` | `500` | Max returned records/ids from a handler. |
 | `ODOO_MAX_PAYLOAD_BYTES` | `262144` | Max incoming tool payload size. |
@@ -88,12 +88,11 @@ Example opt-in mutation payload:
 }
 ```
 
-To enable dangerous tools deliberately:
+To enable writes/mutations deliberately:
 
 ```bash
 export ODOO_READ_ONLY=false
-export ODOO_ENABLE_DANGEROUS_TOOLS=true
-export ODOO_DISABLED_TOOLS=
+# Optional hardening:
 export ODOO_ALLOWED_MODELS=res.partner,sale.order
 export ODOO_ALLOWED_METHODS=action_confirm,button_cancel
 ```
@@ -119,14 +118,14 @@ Safe/read-oriented tools exposed in read-only mode:
 - `get_metadata`
 - `report_download`
 
-Mutation tools hidden in read-only mode and requiring `confirm=true`:
+Mutation tools hidden/blocked in read-only mode and requiring `confirm=true` once read-only is disabled:
 
 - `create`
 - `write`
 - `copy`
-- `unlink` (dangerous, disabled by default)
-- `load` (dangerous, disabled by default)
-- `call_method` (dangerous, disabled by default)
+- `unlink`
+- `load`
+- `call_method`
 
 ## Docker
 

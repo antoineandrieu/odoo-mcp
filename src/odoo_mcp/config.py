@@ -24,16 +24,13 @@ class Settings(BaseSettings):
         "*", validation_alias=AliasChoices("ODOO_ALLOWED_MODELS", "ALLOWED_MODELS")
     )
     allowed_methods: str = Field(
-        "fields_get,search,search_count,search_read,read,name_search,name_get,read_group,"
-        "default_get,check_access_rights,get_metadata,export_data",
-        validation_alias=AliasChoices("ODOO_ALLOWED_METHODS", "ALLOWED_METHODS"),
+        "*", validation_alias=AliasChoices("ODOO_ALLOWED_METHODS", "ALLOWED_METHODS")
     )
     disabled_tools: str = Field(
-        "unlink,load,call_method",
-        validation_alias=AliasChoices("ODOO_DISABLED_TOOLS", "DISABLED_TOOLS"),
+        "", validation_alias=AliasChoices("ODOO_DISABLED_TOOLS", "DISABLED_TOOLS")
     )
     enable_dangerous_tools: bool = Field(
-        False,
+        True,
         validation_alias=AliasChoices("ODOO_ENABLE_DANGEROUS_TOOLS", "ENABLE_DANGEROUS_TOOLS"),
     )
     max_limit: int = Field(500, ge=1, le=5000)

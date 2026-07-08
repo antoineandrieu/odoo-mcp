@@ -25,6 +25,8 @@ ENV PATH="/opt/venv/bin:$PATH" \
     ODOO_TIMEOUT=30 \
     ODOO_VERIFY_SSL=true \
     ODOO_READ_ONLY=true \
+    ODOO_ALLOWED_MODELS="*" \
+    ODOO_ALLOWED_METHODS="*" \
     LOG_LEVEL=INFO
 
 COPY --from=builder /opt/venv /opt/venv
