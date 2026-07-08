@@ -21,6 +21,21 @@ class JsonFilter(logging.Filter):
         return True
 
 
+def redact(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): "***"
+            if any(
+                part in str(key).lower() for part in ("password", "token", "api_key", "private_key")
+            )
+            else redact(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [redact(item) for item in value]
+    return value
+
+
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:  # noqa: D401
         base: dict[str, Any] = {
@@ -33,8 +48,10 @@ class JsonFormatter(logging.Formatter):
         extra = {k: v for k, v in record.__dict__.items() if k not in base_vars}
         # Sanitize secrets
         for key in list(extra.keys()):
-            if any(s in key.lower() for s in ("password", "token", "authorization")):
+            if any(s in key.lower() for s in ("password", "token", "authorization", "api_key")):
                 extra[key] = "***"
+            else:
+                extra[key] = redact(extra[key])
         base.update(extra)
         return json.dumps(base, ensure_ascii=False)
 
@@ -49,4 +66,3 @@ def setup_logging(level: int | str | None = None) -> None:
     handler.addFilter(JsonFilter())
     handler.setFormatter(JsonFormatter())
     root.handlers = [handler]
-

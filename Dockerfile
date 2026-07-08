@@ -1,47 +1,44 @@
-# Dockerfile for Odoo MCP Server
-# Build: docker build -t odoo-mcp .
-# Run: docker run -i -e ODOO_URL=... -e ODOO_DB=... -e ODOO_USERNAME=... -e ODOO_PASSWORD=... odoo-mcp
+# Build: docker build -t odoo-mcp-server .
+# Run: docker run -i -e ODOO_URL=... -e ODOO_DB=... -e ODOO_USERNAME=... -e ODOO_PASSWORD=... odoo-mcp-server
 
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm AS builder
 
-LABEL maintainer="MCP Odoo <devnull@example.com>"
-LABEL description="Model Context Protocol server for Odoo"
+WORKDIR /build
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
-# Set working directory
-WORKDIR /app
-
-# Install system dependencies (if needed)
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy project files
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
 
-# Install Python dependencies
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -e .
+RUN python -m venv /opt/venv && \
+    /opt/venv/bin/pip install --no-cache-dir --upgrade pip && \
+    /opt/venv/bin/pip install --no-cache-dir .
 
-# Environment variables with defaults
-ENV ODOO_URL="" \
-    ODOO_DB="" \
-    ODOO_USERNAME="" \
-    ODOO_PASSWORD="" \
+FROM python:3.12-slim-bookworm AS runtime
+
+LABEL org.opencontainers.image.title="odoo-mcp-server"
+LABEL org.opencontainers.image.description="Secure Model Context Protocol server for guarded Odoo RPC access"
+
+ENV PATH="/opt/venv/bin:$PATH" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
     ODOO_TIMEOUT=30 \
     ODOO_VERIFY_SSL=true \
+    ODOO_READ_ONLY=true \
     LOG_LEVEL=INFO
 
-# Health check (basic validation that Python imports work)
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD python3 -c "import odoo_mcp" || exit 1
+COPY --from=builder /opt/venv /opt/venv
 
-# Run as non-root user for security
-RUN useradd -m -u 1000 mcpuser && \
-    chown -R mcpuser:mcpuser /app
+RUN useradd -m -u 1000 mcpuser
 USER mcpuser
+WORKDIR /home/mcpuser
 
-# Run the MCP server
-# Note: MCP uses stdio, so we use -i for interactive mode
-ENTRYPOINT ["python3", "-m", "odoo_mcp.mcp_server"]
+# Default healthcheck verifies the installed package. Set ODOO_HEALTHCHECK_PING=true
+# to also authenticate and call Odoo version() with the configured env credentials.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import odoo_mcp" && \
+    if [ "${ODOO_HEALTHCHECK_PING:-false}" = "true" ]; then \
+      python -c "from odoo_mcp.config import Settings; from odoo_mcp.odoo_client import OdooClient, OdooClientConfig; s=Settings(); c=OdooClient(OdooClientConfig(str(s.url), s.db, s.username, s.password, s.timeout, s.verify_ssl)); c.authenticate(); c.version(); c.close()"; \
+    fi
+
+ENTRYPOINT ["odoo-mcp-server"]

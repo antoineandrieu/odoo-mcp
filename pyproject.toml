@@ -3,12 +3,12 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mcp-odoo"
+name = "odoo-mcp-server"
 version = "0.1.0"
-description = "MCP server exposing Odoo RPC as typed tools/resources/prompts"
+description = "Secure MCP server exposing guarded Odoo RPC tools/resources/prompts"
 readme = "README.md"
 requires-python = ">=3.10"
-authors = [{name = "MCP Odoo", email = "devnull@example.com"}]
+authors = [{name = "Odoo MCP Server maintainers", email = "maintainers@example.com"}]
 dependencies = [
   "mcp>=1.0.0",
   "httpx>=0.27.0",
@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.scripts]
-mcp-odoo = "odoo_mcp.mcp_server:main"
+odoo-mcp-server = "odoo_mcp.mcp_server:main"
 
 [project.optional-dependencies]
 dev = [

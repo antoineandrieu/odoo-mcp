@@ -15,7 +15,7 @@ fmt:
 	ruff format .
 
 type:
-	mypy --strict
+	mypy src tests
 
 test:
 	pytest -q

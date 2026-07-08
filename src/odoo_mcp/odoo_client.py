@@ -18,7 +18,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from .errors import OdooAuthError, OdooRPCError, TransientOdooError
+from .errors import OdooAuthError, OdooRPCError, OdooValidationError, TransientOdooError
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +96,10 @@ class OdooClient:
             "params": {"service": service, "method": method, "args": args},
             "id": req_id,
         }
+        logger.debug(
+            "odoo.jsonrpc.request",
+            extra={"request_id": req_id, "payload": self._redact(payload)},
+        )
         resp = self._http.post("/jsonrpc", content=json.dumps(payload))
         if resp.status_code >= 500:
             logger.warning("odoo.jsonrpc.5xx", extra={"status": resp.status_code, "id": req_id})
@@ -104,13 +108,49 @@ class OdooClient:
             raise OdooRPCError(f"HTTP {resp.status_code} on /jsonrpc", code=resp.status_code)
         data = resp.json()
         if "error" in data:
-            err = data["error"]
+            err = self._normalize_error(data["error"])
             code = err.get("code")
-            message = err.get("message") or "Odoo RPC error"
-            if code and 500 <= int(code) < 600:
+            message = str(err.get("message") or "Odoo RPC error")
+            logger.warning(
+                "odoo.jsonrpc.error",
+                extra={"request_id": req_id, "error": err, "service": service, "method": method},
+            )
+            if code and isinstance(code, int) and 500 <= code < 600:
                 raise TransientOdooError(message, code=code, data=err)
+            error_name = str(err.get("name", ""))
+            if "AccessDenied" in error_name or "AccessError" in error_name:
+                raise OdooAuthError(message, code=code, data=err)
+            if "ValidationError" in error_name or "UserError" in error_name:
+                raise OdooValidationError(message, code=code, data=err)
             raise OdooRPCError(message, code=code, data=err)
         return data.get("result")
+
+    def _normalize_error(self, err: Mapping[str, Any]) -> dict[str, Any]:
+        raw_data = err.get("data")
+        data: Mapping[str, Any] = raw_data if isinstance(raw_data, Mapping) else {}
+        return {
+            "code": err.get("code"),
+            "message": err.get("message") or data.get("message"),
+            "name": data.get("name"),
+            "debug": data.get("debug"),
+            "arguments": data.get("arguments"),
+            "exception_type": data.get("exception_type"),
+        }
+
+    def _redact(self, value: Any) -> Any:
+        if isinstance(value, Mapping):
+            return {
+                str(key): "***"
+                if any(
+                    part in str(key).lower()
+                    for part in ("password", "token", "api_key", "private_key")
+                )
+                else self._redact(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [self._redact(item) for item in value]
+        return value
 
     def authenticate(self) -> int:
         try:
@@ -340,9 +380,7 @@ class OdooClient:
         )
         return result
 
-    def load(
-        self, model: str, fields: list[str], data: list[list[Any]]
-    ) -> dict[str, Any]:
+    def load(self, model: str, fields: list[str], data: list[list[Any]]) -> dict[str, Any]:
         """Import/load data (bulk create/update)."""
         result: dict[str, Any] = self.execute_kw(model, "load", [fields, data])
         return result
@@ -376,4 +414,3 @@ class OdooClient:
         kwargs = {"fields": fields} if fields else {}
         result: list[dict[str, Any]] = self.execute_kw(model, "read", [ids], kwargs)
         return result
-

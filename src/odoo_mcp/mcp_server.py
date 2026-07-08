@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import uuid
-from typing import Any
+from typing import Any, cast
 
 from .config import Settings
 from .errors import OdooError, OdooRPCError
@@ -56,6 +57,7 @@ from .schemas import (
     WriteIn,
     WriteOut,
 )
+from .security import approx_diff, assert_model_allowed, assert_mutation_allowed, audit_log
 
 logger = logging.getLogger(__name__)
 
@@ -89,20 +91,57 @@ def get_client() -> OdooClient:
     return _client
 
 
+async def run_client_call(method_name: str, *args: Any, **kwargs: Any) -> Any:
+    def call() -> Any:
+        client = get_client()
+        method = getattr(client, method_name)
+        return method(*args, **kwargs)
+
+    return await asyncio.to_thread(call)
+
+
+def request_id() -> str:
+    return str(uuid.uuid4())
+
+
+def enforce_payload_size(settings: Settings, payload: dict[str, Any]) -> None:
+    size = len(json.dumps(payload, default=str).encode())
+    if size > settings.max_payload_bytes:
+        raise OdooRPCError(
+            f"Payload exceeds ODOO_MAX_PAYLOAD_BYTES ({settings.max_payload_bytes})",
+            code="payload_too_large",
+        )
+
+
+def enforce_records_limit(settings: Settings, count: int) -> None:
+    if count > settings.max_records:
+        raise OdooRPCError(
+            f"Result count {count} exceeds ODOO_MAX_RECORDS ({settings.max_records})",
+            code="too_many_records",
+        )
+
+
 # Handlers
 async def handle_ping() -> PingOut:
-    req_id = str(uuid.uuid4())
-    client = get_client()
-    version = client.version()
+    req_id = request_id()
+    version = await run_client_call("version")
+    uid = await asyncio.to_thread(lambda: get_client().uid)
     logger.info("ping", extra={"request_id": req_id, "version": version.get("server_version")})
-    return PingOut(server_version=str(version.get("server_version")), uid=client.uid)
+    return PingOut(server_version=str(version.get("server_version")), uid=uid)
 
 
 async def handle_models_list(payload: dict[str, Any]) -> ModelsListOut:
     data = ModelsListIn.model_validate(payload)
-    req_id = str(uuid.uuid4())
-    client = get_client()
-    total, items = client.models_list(search=data.search, limit=data.limit, offset=data.offset)
+    req_id = request_id()
+    settings = get_settings()
+    enforce_payload_size(settings, payload)
+    total, items = await run_client_call(
+        "models_list",
+        search=data.search,
+        limit=min(data.limit, settings.max_limit),
+        offset=data.offset,
+    )
+    enforce_records_limit(settings, len(items))
     logger.info("models_list", extra={"request_id": req_id, "total": total})
     formatted_items = [ModelItem(model=str(i.get("model", "")), name=i.get("name")) for i in items]
     return ModelsListOut(total=total, items=formatted_items)
@@ -110,8 +149,10 @@ async def handle_models_list(payload: dict[str, Any]) -> ModelsListOut:
 
 async def handle_model_fields(payload: dict[str, Any]) -> ModelFieldsOut:
     data = ModelFieldsIn.model_validate(payload)
-    client = get_client()
-    fields = client.fields_get(data.model)
+    settings = get_settings()
+    enforce_payload_size(settings, payload)
+    assert_model_allowed(settings, data.model)
+    fields = await run_client_call("fields_get", data.model)
     items = [
         {
             "name": name,
@@ -127,148 +168,283 @@ async def handle_model_fields(payload: dict[str, Any]) -> ModelFieldsOut:
 
 async def handle_search_read(payload: dict[str, Any]) -> SearchReadOut:
     data = SearchReadIn.model_validate(payload)
-    client = get_client()
-    count, records = client.search_read(
+    settings = get_settings()
+    enforce_payload_size(settings, payload)
+    assert_model_allowed(settings, data.model)
+    count, records = await run_client_call(
+        "search_read",
         data.model,
         data.domain,
         fields=data.fields,
-        limit=data.limit,
+        limit=min(data.limit, settings.max_limit),
         offset=data.offset,
         order=data.order,
     )
+    enforce_records_limit(settings, len(records))
     return SearchReadOut(count=count, records=records)
 
 
 async def handle_create(payload: dict[str, Any]) -> CreateOut:
     data = CreateIn.model_validate(payload)
-    client = get_client()
-    new_id = client.create(data.model, data.values)
+    req_id = request_id()
+    settings = get_settings()
+    enforce_payload_size(settings, payload)
+    assert_mutation_allowed(
+        settings, tool_name="create", model=data.model, method="create", confirm=data.confirm
+    )
+    audit_log(
+        settings=settings,
+        request_id=req_id,
+        tool_name="create",
+        model=data.model,
+        method="create",
+        diff=approx_diff(data.values),
+    )
+    new_id = await run_client_call("create", data.model, data.values)
     return CreateOut(id=new_id)
 
 
 async def handle_write(payload: dict[str, Any]) -> dict[str, Any]:
     data = WriteIn.model_validate(payload)
-    client = get_client()
-    updated = client.write(data.model, data.ids, data.values)
+    req_id = request_id()
+    settings = get_settings()
+    enforce_payload_size(settings, payload)
+    assert_mutation_allowed(
+        settings, tool_name="write", model=data.model, method="write", confirm=data.confirm
+    )
+    audit_log(
+        settings=settings,
+        request_id=req_id,
+        tool_name="write",
+        model=data.model,
+        method="write",
+        ids=data.ids,
+        diff=approx_diff(data.values),
+    )
+    updated = await run_client_call("write", data.model, data.ids, data.values)
     return WriteOut(updated=updated).model_dump()
 
 
 async def handle_unlink(payload: dict[str, Any]) -> dict[str, Any]:
     data = UnlinkIn.model_validate(payload)
-    client = get_client()
-    deleted = client.unlink(data.model, data.ids)
+    req_id = request_id()
+    settings = get_settings()
+    enforce_payload_size(settings, payload)
+    assert_mutation_allowed(
+        settings, tool_name="unlink", model=data.model, method="unlink", confirm=data.confirm
+    )
+    audit_log(
+        settings=settings,
+        request_id=req_id,
+        tool_name="unlink",
+        model=data.model,
+        method="unlink",
+        ids=data.ids,
+    )
+    deleted = await run_client_call("unlink", data.model, data.ids)
     return UnlinkOut(deleted=deleted).model_dump()
 
 
 async def handle_call_method(payload: dict[str, Any]) -> CallMethodOut:
     data = CallMethodIn.model_validate(payload)
-    client = get_client()
-    res = client.execute_kw(data.model, data.method, data.args or [], data.kwargs or {})
+    req_id = request_id()
+    settings = get_settings()
+    enforce_payload_size(settings, payload)
+    assert_mutation_allowed(
+        settings,
+        tool_name="call_method",
+        model=data.model,
+        method=data.method,
+        confirm=data.confirm,
+    )
+    audit_log(
+        settings=settings,
+        request_id=req_id,
+        tool_name="call_method",
+        model=data.model,
+        method=data.method,
+        diff=approx_diff(data.kwargs),
+    )
+    res = await run_client_call(
+        "execute_kw", data.model, data.method, data.args or [], data.kwargs or {}
+    )
     return CallMethodOut(result=res)
 
 
 async def handle_report_download(payload: dict[str, Any]) -> ReportDownloadOut:
     data = ReportDownloadIn.model_validate(payload)
-    client = get_client()
-    filename, mimetype, content_b64 = client.report_download(
-        data.report_name, data.ids, data.format or "pdf"
+    settings = get_settings()
+    enforce_payload_size(settings, payload)
+    filename, mimetype, content_b64 = await run_client_call(
+        "report_download", data.report_name, data.ids, data.format or "pdf"
     )
+    if len(base64.b64decode(content_b64.encode(), validate=False)) > settings.max_report_bytes:
+        raise OdooRPCError(
+            f"Report exceeds ODOO_MAX_REPORT_BYTES ({settings.max_report_bytes})",
+            code="report_too_large",
+        )
     return ReportDownloadOut(filename=filename, mimetype=mimetype, content_b64=content_b64)
 
 
 async def handle_name_search(payload: dict[str, Any]) -> NameSearchOut:
     data = NameSearchIn.model_validate(payload)
-    client = get_client()
-    results = client.name_search(data.model, data.name, data.domain, data.limit)
+    settings = get_settings()
+    enforce_payload_size(settings, payload)
+    assert_model_allowed(settings, data.model)
+    results = await run_client_call("name_search", data.model, data.name, data.domain, data.limit)
+    enforce_records_limit(settings, len(results))
     return NameSearchOut(results=results)
 
 
 async def handle_name_get(payload: dict[str, Any]) -> NameGetOut:
     data = NameGetIn.model_validate(payload)
-    client = get_client()
-    results = client.name_get(data.model, data.ids)
+    settings = get_settings()
+    enforce_payload_size(settings, payload)
+    assert_model_allowed(settings, data.model)
+    results = await run_client_call("name_get", data.model, data.ids)
+    enforce_records_limit(settings, len(results))
     return NameGetOut(results=results)
 
 
 async def handle_read_group(payload: dict[str, Any]) -> ReadGroupOut:
     data = ReadGroupIn.model_validate(payload)
-    client = get_client()
-    results = client.read_group(
-        data.model, data.domain, data.fields, data.groupby,
-        data.offset, data.limit, data.orderby, data.lazy
+    settings = get_settings()
+    enforce_payload_size(settings, payload)
+    assert_model_allowed(settings, data.model)
+    limit = min(data.limit, settings.max_limit) if data.limit is not None else None
+    results = await run_client_call(
+        "read_group",
+        data.model,
+        data.domain,
+        data.fields,
+        data.groupby,
+        data.offset,
+        limit,
+        data.orderby,
+        data.lazy,
     )
+    enforce_records_limit(settings, len(results))
     return ReadGroupOut(results=results)
 
 
 async def handle_default_get(payload: dict[str, Any]) -> DefaultGetOut:
     data = DefaultGetIn.model_validate(payload)
-    client = get_client()
-    defaults = client.default_get(data.model, data.fields)
+    settings = get_settings()
+    enforce_payload_size(settings, payload)
+    assert_model_allowed(settings, data.model)
+    defaults = await run_client_call("default_get", data.model, data.fields)
     return DefaultGetOut(defaults=defaults)
 
 
 async def handle_onchange(payload: dict[str, Any]) -> OnchangeOut:
     data = OnchangeIn.model_validate(payload)
-    client = get_client()
-    result = client.onchange(
-        data.model, data.ids, data.values, data.field_name, data.field_onchange
+    settings = get_settings()
+    enforce_payload_size(settings, payload)
+    assert_model_allowed(settings, data.model)
+    result = await run_client_call(
+        "onchange", data.model, data.ids, data.values, data.field_name, data.field_onchange
     )
     return OnchangeOut(result=result)
 
 
 async def handle_check_access_rights(payload: dict[str, Any]) -> CheckAccessRightsOut:
     data = CheckAccessRightsIn.model_validate(payload)
-    client = get_client()
-    has_access = client.check_access_rights(data.model, data.operation, data.raise_exception)
+    settings = get_settings()
+    enforce_payload_size(settings, payload)
+    assert_model_allowed(settings, data.model)
+    has_access = await run_client_call(
+        "check_access_rights", data.model, data.operation, data.raise_exception
+    )
     return CheckAccessRightsOut(has_access=has_access)
 
 
 async def handle_search_count(payload: dict[str, Any]) -> SearchCountOut:
     data = SearchCountIn.model_validate(payload)
-    client = get_client()
-    count = client.search_count(data.model, data.domain)
+    settings = get_settings()
+    enforce_payload_size(settings, payload)
+    assert_model_allowed(settings, data.model)
+    count = await run_client_call("search_count", data.model, data.domain)
     return SearchCountOut(count=count)
 
 
 async def handle_copy(payload: dict[str, Any]) -> CopyOut:
     data = CopyIn.model_validate(payload)
-    client = get_client()
-    new_id = client.copy(data.model, data.record_id, data.default)
+    req_id = request_id()
+    settings = get_settings()
+    enforce_payload_size(settings, payload)
+    assert_mutation_allowed(
+        settings, tool_name="copy", model=data.model, method="copy", confirm=data.confirm
+    )
+    audit_log(
+        settings=settings,
+        request_id=req_id,
+        tool_name="copy",
+        model=data.model,
+        method="copy",
+        ids=[data.record_id],
+        diff=approx_diff(data.default),
+    )
+    new_id = await run_client_call("copy", data.model, data.record_id, data.default)
     return CopyOut(new_id=new_id)
 
 
 async def handle_export_data(payload: dict[str, Any]) -> ExportDataOut:
     data = ExportDataIn.model_validate(payload)
-    client = get_client()
-    result = client.export_data(data.model, data.ids, data.fields, data.raw_data)
+    settings = get_settings()
+    enforce_payload_size(settings, payload)
+    assert_model_allowed(settings, data.model)
+    result = await run_client_call("export_data", data.model, data.ids, data.fields, data.raw_data)
     return ExportDataOut(result=result)
 
 
 async def handle_load_data(payload: dict[str, Any]) -> LoadDataOut:
     data = LoadDataIn.model_validate(payload)
-    client = get_client()
-    result = client.load(data.model, data.fields, data.data)
+    req_id = request_id()
+    settings = get_settings()
+    enforce_payload_size(settings, payload)
+    assert_mutation_allowed(
+        settings, tool_name="load", model=data.model, method="load", confirm=data.confirm
+    )
+    audit_log(
+        settings=settings,
+        request_id=req_id,
+        tool_name="load",
+        model=data.model,
+        method="load",
+        diff=approx_diff(fields=data.fields),
+    )
+    result = await run_client_call("load", data.model, data.fields, data.data)
     return LoadDataOut(result=result)
 
 
 async def handle_get_metadata(payload: dict[str, Any]) -> GetMetadataOut:
     data = GetMetadataIn.model_validate(payload)
-    client = get_client()
-    metadata = client.get_metadata(data.model, data.ids)
+    settings = get_settings()
+    enforce_payload_size(settings, payload)
+    assert_model_allowed(settings, data.model)
+    metadata = await run_client_call("get_metadata", data.model, data.ids)
+    enforce_records_limit(settings, len(metadata))
     return GetMetadataOut(metadata=metadata)
 
 
 async def handle_search(payload: dict[str, Any]) -> SearchOut:
     data = SearchIn.model_validate(payload)
-    client = get_client()
-    ids = client.search(data.model, data.domain, data.offset, data.limit, data.order)
+    settings = get_settings()
+    enforce_payload_size(settings, payload)
+    assert_model_allowed(settings, data.model)
+    limit = min(data.limit, settings.max_limit) if data.limit is not None else None
+    ids = await run_client_call("search", data.model, data.domain, data.offset, limit, data.order)
+    enforce_records_limit(settings, len(ids))
     return SearchOut(ids=ids)
 
 
 async def handle_read(payload: dict[str, Any]) -> ReadOut:
     data = ReadIn.model_validate(payload)
-    client = get_client()
-    records = client.read(data.model, data.ids, data.fields)
+    settings = get_settings()
+    enforce_payload_size(settings, payload)
+    assert_model_allowed(settings, data.model)
+    records = await run_client_call("read", data.model, data.ids, data.fields)
+    enforce_records_limit(settings, len(records))
     return ReadOut(records=records)
 
 
@@ -290,7 +466,7 @@ def server_instance():  # type: ignore[no-untyped-def]
     # Tools definitions and dispatcher
     @s.list_tools()  # type: ignore[no-untyped-call]
     async def _list_tools():  # type: ignore[no-untyped-def]
-        return [
+        tools = [
             types.Tool(
                 name="ping",
                 description="Vérifie la connexion (auth + version)",
@@ -424,89 +600,112 @@ def server_instance():  # type: ignore[no-untyped-def]
                 outputSchema=GetMetadataOut.model_json_schema(),
             ),
         ]
+        settings = get_settings()
+        hidden_in_read_only = {"create", "write", "copy", "load", "unlink", "call_method"}
+        hidden_dangerous = {"unlink", "load", "call_method"}
+        return [
+            tool
+            for tool in tools
+            if tool.name not in settings.disabled_tools_set
+            and (not settings.read_only or tool.name not in hidden_in_read_only)
+            and (settings.enable_dangerous_tools or tool.name not in hidden_dangerous)
+        ]
 
     @s.call_tool(validate_input=True)  # type: ignore[misc]
     async def _call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        if name == "ping":
-            return (await handle_ping()).model_dump()
-        if name == "models_list":
-            return (await handle_models_list(arguments)).model_dump()
-        if name == "model_fields":
-            return (await handle_model_fields(arguments)).model_dump()
-        if name == "search_read":
-            return (await handle_search_read(arguments)).model_dump()
-        if name == "create":
-            return (await handle_create(arguments)).model_dump()
-        if name == "write":
-            return await handle_write(arguments)
-        if name == "unlink":
-            return await handle_unlink(arguments)
-        if name == "call_method":
-            return (await handle_call_method(arguments)).model_dump()
-        if name == "report_download":
-            return (await handle_report_download(arguments)).model_dump()
-        if name == "search":
-            return (await handle_search(arguments)).model_dump()
-        if name == "read":
-            return (await handle_read(arguments)).model_dump()
-        if name == "name_search":
-            return (await handle_name_search(arguments)).model_dump()
-        if name == "name_get":
-            return (await handle_name_get(arguments)).model_dump()
-        if name == "read_group":
-            return (await handle_read_group(arguments)).model_dump()
-        if name == "default_get":
-            return (await handle_default_get(arguments)).model_dump()
-        if name == "onchange":
-            return (await handle_onchange(arguments)).model_dump()
-        if name == "check_access_rights":
-            return (await handle_check_access_rights(arguments)).model_dump()
-        if name == "search_count":
-            return (await handle_search_count(arguments)).model_dump()
-        if name == "copy":
-            return (await handle_copy(arguments)).model_dump()
-        if name == "export_data":
-            return (await handle_export_data(arguments)).model_dump()
-        if name == "load":
-            return (await handle_load_data(arguments)).model_dump()
-        if name == "get_metadata":
-            return (await handle_get_metadata(arguments)).model_dump()
-        raise OdooRPCError(f"Unknown tool: {name}")
+        req_id = request_id()
+        handlers: dict[str, Any] = {
+            "models_list": handle_models_list,
+            "model_fields": handle_model_fields,
+            "search_read": handle_search_read,
+            "create": handle_create,
+            "report_download": handle_report_download,
+            "search": handle_search,
+            "read": handle_read,
+            "name_search": handle_name_search,
+            "name_get": handle_name_get,
+            "read_group": handle_read_group,
+            "default_get": handle_default_get,
+            "onchange": handle_onchange,
+            "check_access_rights": handle_check_access_rights,
+            "search_count": handle_search_count,
+            "copy": handle_copy,
+            "export_data": handle_export_data,
+            "get_metadata": handle_get_metadata,
+        }
+        dict_handlers: dict[str, Any] = {
+            "write": handle_write,
+            "unlink": handle_unlink,
+            "load": handle_load_data,
+        }
+        try:
+            if name == "ping":
+                return (await handle_ping()).model_dump()
+            if name == "call_method":
+                return (await handle_call_method(arguments)).model_dump()
+            if name in dict_handlers:
+                result = await dict_handlers[name](arguments)
+                return result if isinstance(result, dict) else result.model_dump()
+            if name in handlers:
+                return cast(dict[str, Any], (await handlers[name](arguments)).model_dump())
+            raise OdooRPCError(f"Unknown tool: {name}", code="unknown_tool")
+        except OdooError as exc:
+            logger.warning(
+                "mcp.tool.error",
+                extra={
+                    "request_id": req_id,
+                    "tool": name,
+                    "error_type": exc.__class__.__name__,
+                    "error_code": exc.code,
+                },
+            )
+            return exc.to_mcp_error(request_id=req_id)
 
     # Resources
     @s.list_resources()  # type: ignore[no-untyped-call]
     async def _list_resources():  # type: ignore[no-untyped-def]
         return [
-            types.Resource(uri="odoo://version", name="Odoo Version", description="Version serveur + db + uid"),  # type: ignore[call-arg]
-            types.Resource(uri="odoo://models", name="Odoo Models", description="Liste des modèles (TTL 60s)"),  # type: ignore[call-arg]
+            types.Resource(
+                uri="odoo://version",  # type: ignore[arg-type]
+                name="Odoo Version",
+                description="Version serveur + db + uid",
+            ),
+            types.Resource(
+                uri="odoo://models",  # type: ignore[arg-type]
+                name="Odoo Models",
+                description="Liste des modèles (TTL 60s)",
+            ),
         ]
 
     @s.list_resource_templates()  # type: ignore[no-untyped-call]
     async def _list_resource_templates():  # type: ignore[no-untyped-def]
         return [
-            types.ResourceTemplate(  # type: ignore[call-arg]
-                uriTemplate="odoo://schema/{model}", name="Odoo Model Schema", description="Schéma détaillé d'un modèle"
+            types.ResourceTemplate(
+                uriTemplate="odoo://schema/{model}",
+                name="Odoo Model Schema",
+                description="Schéma détaillé d'un modèle",
             ),
         ]
 
     @s.read_resource()  # type: ignore[no-untyped-call, misc]
     async def _read_resource(uri: str) -> str:
-        client = get_client()
         if uri == "odoo://version":
-            version = client.version()
+            version = await run_client_call("version")
+            uid = await asyncio.to_thread(lambda: get_client().uid)
             payload = {
                 "server_version": version.get("server_version"),
                 "db": get_settings().db,
-                "uid": client.uid,
+                "uid": uid,
             }
             return json.dumps(payload)
         if uri == "odoo://models":
-            total, items = client.models_list(limit=100, offset=0)
+            total, items = await run_client_call("models_list", limit=100, offset=0)
             payload = {"total": total, "items": items}
             return json.dumps(payload)
         if uri.startswith("odoo://schema/"):
             model = uri.split("/", 2)[2]
-            fields = client.fields_get(model)
+            assert_model_allowed(get_settings(), model)
+            fields = await run_client_call("fields_get", model)
             return json.dumps({"model": model, "fields": fields})
         raise OdooRPCError(f"Unknown resource: {uri}")
 
@@ -553,8 +752,8 @@ def server_instance():  # type: ignore[no-untyped-def]
                     content=types.TextContent(
                         type="text",
                         text=(
-                            f"Modèle: {args.get('model','')}\n"
-                            f"Objectif: {args.get('goal_description','')}"
+                            f"Modèle: {args.get('model', '')}\n"
+                            f"Objectif: {args.get('goal_description', '')}"
                         ),
                     ),
                 ),
@@ -577,7 +776,7 @@ def server_instance():  # type: ignore[no-untyped-def]
                 types.PromptMessage(
                     role="user",
                     content=types.TextContent(
-                        type="text", text=f"Contexte: {args.get('goal_description','')}"
+                        type="text", text=f"Contexte: {args.get('goal_description', '')}"
                     ),
                 ),
             ]

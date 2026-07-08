@@ -21,7 +21,7 @@ class MockClient:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def post(self, path: str, content: str) -> MockResponse:  # type: ignore[override]
+    def post(self, path: str, content: str) -> MockResponse:
         data = json.loads(content)
         self.calls.append({"path": path, "data": data})
         params = data["params"]
@@ -65,4 +65,3 @@ def test_auth_and_search_read(monkeypatch: pytest.MonkeyPatch) -> None:
     count, records = client.search_read("res.partner", [])
     assert count == 2
     assert len(records) == 2
-
