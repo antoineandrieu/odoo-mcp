@@ -6,7 +6,7 @@ The server exposes typed MCP tools for common Odoo operations and guarded mutati
 
 ## Current status and limits
 
-This project is useful for MCP-driven Odoo exploration and guarded automation, but it is not a blanket “complete Odoo API” proxy by default. Dangerous operations are disabled unless explicitly enabled and confirmed.
+This project is useful for MCP-driven Odoo exploration and guarded automation, but it is not a blanket “complete Odoo API” proxy by default. Mutations are blocked by read-only mode unless explicitly enabled, and mutating calls still require `confirm=true`.
 
 Implemented guardrails:
 
@@ -42,6 +42,47 @@ odoo-mcp-server
 # or
 python -m odoo_mcp.mcp_server
 ```
+
+## MCP transports
+
+The MCP 2025-06-18 specification defines two standard transports. This server supports both:
+
+1. `stdio` (default): the MCP client starts `odoo-mcp-server` as a local subprocess and exchanges JSON-RPC over stdin/stdout. This is best for local desktop agents and keeps the Odoo credentials off the network.
+2. Streamable HTTP: the server runs as an HTTP service at `ODOO_MCP_PATH` and can be used by clients that support remote MCP servers. Use this behind HTTPS and authentication if exposed outside localhost.
+
+Transport configuration:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `ODOO_MCP_TRANSPORT` / `MCP_TRANSPORT` | `stdio` | `stdio`, `http`, or `streamable-http`. |
+| `ODOO_MCP_HOST` / `MCP_HOST` | `127.0.0.1` | Bind address for Streamable HTTP. Use `0.0.0.0` only behind trusted network controls. |
+| `ODOO_MCP_PORT` / `MCP_PORT` | `8765` | Streamable HTTP port. |
+| `ODOO_MCP_PATH` / `MCP_PATH` | `/mcp` | Streamable HTTP MCP endpoint. |
+| `ODOO_MCP_AUTH_TOKEN` / `MCP_AUTH_TOKEN` | empty | Optional bearer token required on the MCP endpoint. |
+| `ODOO_MCP_STATELESS_HTTP` | `false` | Create a fresh MCP transport per HTTP request. |
+| `ODOO_MCP_JSON_RESPONSE` | `false` | Prefer JSON responses instead of SSE streams where supported by the SDK/client. |
+| `ODOO_MCP_ALLOWED_HOSTS` | `127.0.0.1,localhost` | Host allowlist for DNS rebinding protection. |
+| `ODOO_MCP_ALLOWED_ORIGINS` | empty | Optional origin allowlist. |
+
+Run locally over stdio:
+
+```bash
+odoo-mcp-server
+```
+
+Run as Streamable HTTP:
+
+```bash
+export ODOO_MCP_TRANSPORT=http
+export ODOO_MCP_HOST=127.0.0.1
+export ODOO_MCP_PORT=8765
+export ODOO_MCP_AUTH_TOKEN=change-me
+odoo-mcp-server
+```
+
+The HTTP MCP endpoint is `http://127.0.0.1:8765/mcp`; health is available at `/healthz`.
+
+For hosted deployments, prefer private networking/VPN or a reverse proxy that terminates TLS and injects strong authentication. Keep `ODOO_READ_ONLY=true` unless the deployment is intentionally allowed to mutate Odoo.
 
 ## Claude Desktop / MCP configuration
 
@@ -144,6 +185,21 @@ docker run -i --rm \
   -e ODOO_USERNAME=your_username \
   -e ODOO_PASSWORD=your_password \
   -e ODOO_READ_ONLY=true \
+  odoo-mcp-server
+```
+
+Run Streamable HTTP in Docker:
+
+```bash
+docker run --rm -p 8765:8765 \
+  -e ODOO_URL=https://your-instance.odoo.com \
+  -e ODOO_DB=your_database \
+  -e ODOO_USERNAME=your_username \
+  -e ODOO_PASSWORD=your_password \
+  -e ODOO_READ_ONLY=true \
+  -e ODOO_MCP_TRANSPORT=http \
+  -e ODOO_MCP_HOST=0.0.0.0 \
+  -e ODOO_MCP_AUTH_TOKEN=change-me \
   odoo-mcp-server
 ```
 

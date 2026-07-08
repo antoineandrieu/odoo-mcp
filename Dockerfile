@@ -27,6 +27,10 @@ ENV PATH="/opt/venv/bin:$PATH" \
     ODOO_READ_ONLY=true \
     ODOO_ALLOWED_MODELS="*" \
     ODOO_ALLOWED_METHODS="*" \
+    ODOO_MCP_TRANSPORT=stdio \
+    ODOO_MCP_HOST=127.0.0.1 \
+    ODOO_MCP_PORT=8765 \
+    ODOO_MCP_PATH=/mcp \
     LOG_LEVEL=INFO
 
 COPY --from=builder /opt/venv /opt/venv
@@ -34,6 +38,8 @@ COPY --from=builder /opt/venv /opt/venv
 RUN useradd -m -u 1000 mcpuser
 USER mcpuser
 WORKDIR /home/mcpuser
+
+EXPOSE 8765
 
 # Default healthcheck verifies the installed package. Set ODOO_HEALTHCHECK_PING=true
 # to also authenticate and call Odoo version() with the configured env credentials.

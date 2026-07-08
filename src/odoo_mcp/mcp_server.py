@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 import uuid
+from collections.abc import AsyncIterator
+from http import HTTPStatus
 from typing import Any, cast
 
 from .config import Settings
@@ -786,19 +789,117 @@ def server_instance():  # type: ignore[no-untyped-def]
     return s
 
 
-async def amain() -> None:
-    # Lazy import transport to avoid dependency in import path
+class BearerTokenASGIApp:
+    def __init__(self, app: Any, token: str | None) -> None:
+        self.app = app
+        self.token = token
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if not self.token or scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        headers = {key.lower(): value for key, value in scope.get("headers", [])}
+        expected = f"Bearer {self.token}".encode()
+        if headers.get(b"authorization") == expected:
+            await self.app(scope, receive, send)
+            return
+        await send(
+            {
+                "type": "http.response.start",
+                "status": HTTPStatus.UNAUTHORIZED,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": b'{"error":"missing or invalid bearer token"}',
+            }
+        )
+
+
+class StreamableHTTPASGIApp:
+    def __init__(self, session_manager: Any) -> None:
+        self.session_manager = session_manager
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        await self.session_manager.handle_request(scope, receive, send)
+
+
+def create_http_app(settings: Settings | None = None) -> Any:
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+    from mcp.server.transport_security import TransportSecuritySettings
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+
+    settings = settings or get_settings()
+    server = server_instance()  # type: ignore[no-untyped-call]
+    security_settings = TransportSecuritySettings(
+        allowed_hosts=settings.mcp_allowed_hosts_list,
+        allowed_origins=settings.mcp_allowed_origins_list,
+    )
+    session_manager = StreamableHTTPSessionManager(
+        app=server,
+        json_response=settings.mcp_json_response,
+        stateless=settings.mcp_stateless_http,
+        security_settings=security_settings,
+    )
+    mcp_app = BearerTokenASGIApp(StreamableHTTPASGIApp(session_manager), settings.mcp_auth_token)
+
+    async def healthz(_request: Any) -> JSONResponse:
+        return JSONResponse({"status": "ok", "transport": "streamable-http"})
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_app: Any) -> AsyncIterator[None]:
+        async with session_manager.run():
+            yield
+
+    return Starlette(
+        routes=[
+            Route(settings.mcp_path, endpoint=mcp_app),
+            Route("/healthz", endpoint=healthz, methods=["GET"]),
+        ],
+        lifespan=lifespan,
+    )
+
+
+async def run_stdio() -> None:
     from mcp.server.stdio import stdio_server
 
+    server = server_instance()  # type: ignore[no-untyped-call]
+    init_options = server.create_initialization_options()
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(read_stream, write_stream, init_options)
+
+
+async def run_streamable_http(settings: Settings) -> None:
+    import uvicorn
+
+    app = create_http_app(settings)
+    config = uvicorn.Config(
+        app,
+        host=settings.mcp_host,
+        port=settings.mcp_port,
+        log_level="info",
+    )
+    server = uvicorn.Server(config)
+    await server.serve()
+
+
+async def amain() -> None:
     setup_logging()
     # ensure settings load early for fast fail
     s = get_settings()
     logger.info("mcp.start", extra={"settings": s.safe_dict()})
     _ = get_client()
-    server = server_instance()  # type: ignore[no-untyped-call]
-    init_options = server.create_initialization_options()
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(read_stream, write_stream, init_options)
+    if s.mcp_transport == "stdio":
+        await run_stdio()
+        return
+    if s.mcp_transport in {"http", "streamable-http"}:
+        await run_streamable_http(s)
+        return
+    raise OdooRPCError(f"Unsupported MCP transport: {s.mcp_transport}")
 
 
 def main() -> None:
