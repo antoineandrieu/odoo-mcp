@@ -20,7 +20,12 @@ dist/
 .mypy_cache/
 .ruff_cache/
 
+# Local logs and generated client config snippets
+*.log
+claude_config.json
+
 # OS / Editor
 .DS_Store
 .idea/
 .vscode/
+.claude/

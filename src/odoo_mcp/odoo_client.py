@@ -78,10 +78,6 @@ class OdooClient:
     def close(self) -> None:
         self._http.close()
 
-    # Retries for transient network/server errors
-    def _transient_exc(self, exc: BaseException) -> bool:
-        return isinstance(exc, (httpx.ReadTimeout, httpx.ConnectError, TransientOdooError))
-
     @retry(
         reraise=True,
         retry=retry_if_exception_type((httpx.ReadTimeout, httpx.ConnectError, TransientOdooError)),

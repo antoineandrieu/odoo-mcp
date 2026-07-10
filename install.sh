@@ -129,7 +129,7 @@ echo ""
 echo "4. ${BLUE}Test the connection${NC}"
 echo "   Ask Claude: \"Can you ping the Odoo server?\""
 echo ""
-echo "For more help, see: ${YELLOW}INSTALL.md${NC}"
+echo "For more help, see: ${YELLOW}README.md${NC}"
 echo ""
 
 # Deactivate virtual environment
